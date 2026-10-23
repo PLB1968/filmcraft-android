@@ -97,6 +97,10 @@ import kotlinx.coroutines.launch
 /** The editor: preview, transport, timeline and tools, stacked or side by side. */
 @Composable
 fun EditorScreen(ed: EditorController) {
+    if (ed.proMode) {
+        ProEditor(ed)
+        return
+    }
     BackHandler {
         when {
             ed.panel != null -> ed.panel = null
@@ -244,6 +248,8 @@ private fun TopBar(ed: EditorController, sideBySide: Boolean) {
             FcIconButton(LucideIcons.Redo2.glyph(), "Redo", { ed.redo() }, enabled = st?.canRedo == true, modifier = Modifier.testTag("editor_top_bar_redo_button"))
             Spacer(Modifier.width(8.dp))
         }
+        ModeSwitch(ed)
+        Spacer(Modifier.width(8.dp))
         Box(
             Modifier
                 .padding(end = 12.dp)
@@ -286,7 +292,7 @@ private fun TransportRow(ed: EditorController, onResize: (Float) -> Unit) {
 
 /** The program monitor: the picture at the playhead, and the selected item's frame to move it by. */
 @Composable
-private fun Preview(ed: EditorController, modifier: Modifier) {
+internal fun Preview(ed: EditorController, modifier: Modifier) {
     val t = ed.timeline
     val density = LocalDensity.current
     val haptic = LocalHapticFeedback.current

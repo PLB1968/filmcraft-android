@@ -17,6 +17,7 @@ import io.github.artcraftandroid.filmcraft.core.ExportQuality
 import io.github.artcraftandroid.filmcraft.core.ExportSettings
 import io.github.artcraftandroid.filmcraft.core.frameSizeFor
 import io.github.artcraftandroid.filmcraft.core.trimMemory
+import io.github.artcraftandroid.filmcraft.engine.AppPrefs
 import io.github.artcraftandroid.filmcraft.engine.Engine
 import io.github.artcraftandroid.filmcraft.engine.ProjectEntry
 import io.github.artcraftandroid.filmcraft.engine.Projects
@@ -60,6 +61,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     var engineProblem by mutableStateOf<String?>(null)
         private set
     val projects = Projects(app)
+    val prefs = AppPrefs(app)
+
+    /** Settings › Pro mode: what projects that were never switched open in. */
+    var proModeDefault by mutableStateOf(prefs.proModeDefault)
+        private set
+
+    fun changeProModeDefault(on: Boolean) {
+        proModeDefault = on
+        prefs.proModeDefault = on
+    }
 
     var screen by mutableStateOf(Screen.Home)
         private set
@@ -220,7 +231,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         opening = true
         try {
             val entry = withContext(Dispatchers.IO) { projects.touch(p) }
-            val ed = EditorController(e, entry, projects, viewModelScope, this)
+            val ed = EditorController(e, entry, projects, viewModelScope, this, proDefault = proModeDefault)
             ed.load(fresh)
             editor = ed
             screen = Screen.Editor

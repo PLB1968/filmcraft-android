@@ -29,6 +29,7 @@ pub mod export;
 pub mod model;
 pub mod placement;
 pub mod presets;
+pub mod pro;
 pub mod render;
 pub mod samples;
 pub mod speech;
@@ -37,6 +38,7 @@ pub mod text;
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use model::TimelineInfo;
 use presets::PresetInfo;
+use pro::{ProTimeline, TrackSwitches};
 use render::Renderer;
 use speech::{CaptionLook, CaptionStatus, SpeechAudio, SpeechSettings};
 use text::{Placement, TextStyle};
@@ -162,6 +164,12 @@ pub fn transition_presets() -> Vec<PresetInfo> {
 #[uniffi::export]
 pub fn text_presets() -> Vec<PresetInfo> {
     text::presets()
+}
+
+/// The marker colours Pro mode offers, in the desktop's order.
+#[uniffi::export]
+pub fn marker_colors() -> Vec<String> {
+    pro::marker_colors()
 }
 
 /// Give back memory kept for later: an export's frame buffers and the natural voices' model. Call
@@ -637,6 +645,97 @@ impl MobileSession {
         let mut s = self.lock();
         edits::set_aspect(&mut s, num, den)?;
         model::timeline(&s)
+    }
+
+    // ---- Pro mode: tracks, targeting, in/out and markers ----
+
+    /// The timeline as Pro mode shows it: every track and clip as they are in the engine.
+    pub fn pro_timeline(&self) -> Result<ProTimeline, MobileError> {
+        pro::timeline(&self.lock())
+    }
+
+    /// Add `video` tracks above the top video track and `audio` tracks below the bottom audio one.
+    pub fn add_tracks(&self, video: u32, audio: u32) -> Result<(), MobileError> {
+        pro::add_tracks(&mut self.lock(), video, audio)
+    }
+
+    /// Delete a track and its clips (a sequence keeps one track of each kind).
+    pub fn delete_track(&self, track: u64) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::delete_track(s, track))
+    }
+
+    /// Change a track's header switches (lock, sync lock, output, mute, solo, name): one undo step.
+    pub fn set_track(&self, track: u64, switches: TrackSwitches) -> Result<(), MobileError> {
+        pro::set_track(&mut self.lock(), track, &switches)
+    }
+
+    /// Target a track (or not).
+    pub fn set_track_targeted(&self, track: u64, on: bool) -> Result<(), MobileError> {
+        pro::set_targeted(&mut self.lock(), track, on)
+    }
+
+    /// Patch the Source monitor's video or audio to `track` (or unpatch it).
+    pub fn set_source_patch(&self, track: u64, on: bool) -> Result<(), MobileError> {
+        pro::set_source_patch(&mut self.lock(), track, on)
+    }
+
+    /// Snap in Timeline; returns the setting now.
+    pub fn set_snapping(&self, on: bool) -> Result<bool, MobileError> {
+        pro::set_snapping(&mut self.lock(), on)
+    }
+
+    /// Linked Selection; returns the setting now.
+    pub fn set_linked_selection(&self, on: bool) -> Result<bool, MobileError> {
+        pro::set_linked_selection(&mut self.lock(), on)
+    }
+
+    /// Mark the sequence In at `time`, or clear it (`None`).
+    pub fn set_mark_in(&self, time: Option<i64>) -> Result<(), MobileError> {
+        pro::set_mark(&mut self.lock(), true, time)
+    }
+
+    /// Mark the sequence Out at `time`, or clear it (`None`).
+    pub fn set_mark_out(&self, time: Option<i64>) -> Result<(), MobileError> {
+        pro::set_mark(&mut self.lock(), false, time)
+    }
+
+    pub fn clear_in_out(&self) -> Result<(), MobileError> {
+        pro::clear_in_out(&mut self.lock())
+    }
+
+    /// Add a sequence marker at `time`; returns it.
+    pub fn add_marker(&self, time: i64, name: String) -> Result<u64, MobileError> {
+        pro::add_marker(&mut self.lock(), time, &name)
+    }
+
+    /// Change a marker's name, comment and colour (one of [`marker_colors`]; empty keeps it).
+    pub fn edit_marker(&self, marker: u64, name: String, comment: String, color: String) -> Result<(), MobileError> {
+        pro::edit_marker(&mut self.lock(), marker, &name, &comment, &color)
+    }
+
+    pub fn delete_marker(&self, marker: u64) -> Result<(), MobileError> {
+        pro::delete_marker(&mut self.lock(), marker)
+    }
+
+    /// Go to the next (or previous) marker; returns the playhead.
+    pub fn go_to_marker(&self, next: bool) -> Result<i64, MobileError> {
+        pro::go_to_marker(&mut self.lock(), next)
+    }
+
+    /// Select clips (with their linked partners while Linked Selection is on); `add` toggles
+    /// them in or out of the selection.
+    pub fn select_clips(&self, clips: Vec<u64>, add: bool) -> Result<(), MobileError> {
+        pro::select_clips(&mut self.lock(), &clips, add)
+    }
+
+    /// Move a clip to `start` on `track`, overwriting what is there (linked partners follow).
+    pub fn pro_move_clip(&self, clip: u64, track: u64, start: i64) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::move_clip(s, clip, track, start))
+    }
+
+    /// Delete the selected clips; `ripple` closes the gap they leave.
+    pub fn delete_selection(&self, ripple: bool) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::delete_selection(s, ripple))
     }
 
     // ---- export ----

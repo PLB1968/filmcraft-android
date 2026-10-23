@@ -58,6 +58,17 @@ object TimelineMath {
         return "%02d".format(min(f, cap.toLong()))
     }
 
+    /**
+     * A desktop timecode, hours:minutes:seconds:frames ("00:01:02:15"), counted in whole frames
+     * at the rate's nominal frames per second (non-drop-frame, as Premiere shows 29.97 by default).
+     */
+    fun timecode(ticks: Long, num: Long, den: Long): String {
+        val fps = max(1L, if (den > 0) Math.round(num.toDouble() / den) else 30L)
+        val f = frames(max(0L, ticks), num, den)
+        val secs = f / fps
+        return "%02d:%02d:%02d:%02d".format(secs / 3600, (secs / 60) % 60, secs % 60, f % fps)
+    }
+
     /** Seconds with one decimal and "s" ("0.4s"). */
     fun seconds1(ticks: Long): String = "%.1fs".format(ticks.toDouble() / TPS)
 

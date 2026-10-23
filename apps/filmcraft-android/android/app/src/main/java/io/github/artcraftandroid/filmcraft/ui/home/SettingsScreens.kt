@@ -17,6 +17,11 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -87,6 +92,31 @@ private fun Row48(label: String, onClick: () -> Unit) {
     }
 }
 
+@Composable
+private fun SwitchRow(label: String, detail: String, on: Boolean, onChange: (Boolean) -> Unit, tag: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .toggleable(value = on, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = 12.dp, vertical = 12.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = FcType.Body, color = Fc.Body)
+            Text(detail, style = FcType.BodySmall, color = Fc.Detail)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = on,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Fc.Accent, uncheckedThumbColor = Fc.Secondary, uncheckedTrackColor = Fc.Raised),
+        )
+    }
+}
+
 /** What a downloaded package is for, in the user's words. */
 private fun packageLabel(id: String) = when (id) {
     "whisper-tiny" -> "Captions: faster speech model"
@@ -108,6 +138,14 @@ fun SettingsScreen(vm: AppViewModel) {
         }
     }
     Page("Settings", { vm.back() }, "screen_settings") {
+        SwitchRow(
+            "Pro mode",
+            "Open projects in the desktop-style editor: Source and Program monitors, named tracks and Premiere's tools. Each project remembers its own choice from the editor's top bar.",
+            vm.proModeDefault,
+            { vm.changeProModeDefault(it) },
+            tag = "settings_pro_mode",
+        )
+        Spacer(Modifier.height(8.dp))
         Row48("About FilmCraft") { vm.show(Screen.About) }
         if (stored.isNotEmpty()) {
             Spacer(Modifier.height(24.dp))

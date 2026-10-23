@@ -105,4 +105,14 @@ class TimelineMathTest {
         val tops = TimelineMath.laneTops(listOf(64f), 0, 2f, 100f, 0f)
         assertArrayEquals(floatArrayOf(18f), tops, 0.01f)
     }
+
+    @Test
+    fun desktopTimecodesCountHoursMinutesSecondsAndFrames() {
+        assertEquals("00:00:00:00", TimelineMath.timecode(0, 30, 1))
+        assertEquals("00:00:01:12", TimelineMath.timecode(TimelineMath.tickOfFrame(42, 30, 1), 30, 1))
+        assertEquals("01:02:03:00", TimelineMath.timecode((3600 + 120 + 3) * TPS, 24, 1))
+        // 29.97 counts 30 frames a second (non-drop-frame)
+        assertEquals("00:00:01:00", TimelineMath.timecode(TimelineMath.tickOfFrame(30, 30000, 1001), 30000, 1001))
+        assertEquals("00:00:00:00", TimelineMath.timecode(-5, 30, 1))
+    }
 }
