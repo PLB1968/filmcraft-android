@@ -150,19 +150,19 @@ fun ProEditor(ed: EditorController) {
 private fun ProTopBar(ed: EditorController) {
     val st = ed.status
     Row(Modifier.fillMaxWidth().height(FcSize.TopBar).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        FcIconButton(LucideIcons.House.glyph(), "Home", { ed.closeEditor() }, size = 44.dp, modifier = Modifier.testTag("editor_home_button"))
+        HelpIconButton(ed, LucideIcons.House.glyph(), "Home", "home", "editor_home_button", iconSize = 24.dp) { ed.closeEditor() }
         Text(ed.project.name, style = FcType.Label, color = Fc.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
         ModeSwitch(ed)
         Spacer(Modifier.width(4.dp))
-        FcIconButton(LucideIcons.Undo2.glyph(), "Undo", { ed.undo() }, enabled = st?.canUndo == true, size = 44.dp, modifier = Modifier.testTag("editor_top_bar_undo_button"))
-        FcIconButton(LucideIcons.Redo2.glyph(), "Redo", { ed.redo() }, enabled = st?.canRedo == true, size = 44.dp, modifier = Modifier.testTag("editor_top_bar_redo_button"))
+        HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = 24.dp) { ed.undo() }
+        HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = 24.dp) { ed.redo() }
         Box(
             Modifier
                 .padding(start = 4.dp, end = 8.dp)
                 .height(36.dp)
                 .clip(RoundedCornerShape(18.dp))
                 .background(if (ed.duration > 0L) Color.White else Color.White.copy(alpha = 0.4f))
-                .clickable(role = Role.Button) { ed.export() }
+                .helpClick(ed, "export") { ed.export() }
                 .padding(horizontal = 14.dp)
                 .testTag("editor_export_button"),
             contentAlignment = Alignment.Center,
@@ -186,7 +186,7 @@ fun ModeSwitch(ed: EditorController) {
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(16.dp))
                     .background(if (on) Fc.Accent else Color.Transparent)
-                    .clickable(role = Role.Tab) { ed.switchProMode(pro) }
+                    .helpClick(ed, "mode", role = Role.Tab) { ed.switchProMode(pro) }
                     .padding(horizontal = 12.dp)
                     .testTag("editor_mode_${label.lowercase()}")
                     .semantics { selected = on },
@@ -321,26 +321,26 @@ private fun ProTransport(ed: EditorController) {
             style = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = Fc.AccentLight, fontFeatureSettings = "tnum"),
             modifier = Modifier.padding(horizontal = 8.dp).testTag("pro_program_timecode"),
         )
-        TransportButton(ProGlyphs.MarkIn, "Mark In", "pro_program_mark_in", has) { ed.markIn() }
-        TransportButton(ProGlyphs.MarkOut, "Mark Out", "pro_program_mark_out", has) { ed.markOut() }
-        TransportButton(ProGlyphs.GoToIn, "Go to In", "pro_program_go_to_in", ed.pro?.markIn != null) { ed.goToIn() }
-        TransportButton(Glyphs.StepBack, "Step Back 1 Frame", "editor_previous_frame_button", has) { ed.step(-1) }
-        TransportButton(if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Stop" else "Play", "editor_play_button", has) { ed.togglePlay() }
-        TransportButton(Glyphs.StepForward, "Step Forward 1 Frame", "editor_next_frame_button", has) { ed.step(1) }
-        TransportButton(ProGlyphs.GoToOut, "Go to Out", "pro_program_go_to_out", ed.pro?.markOut != null) { ed.goToOut() }
-        TransportButton(ProGlyphs.Marker, "Add Marker", "pro_program_add_marker", has) { ed.addMarker() }
-        TransportButton(LucideIcons.ChevronLeft.glyph(), "Go to Previous Marker", "pro_program_prev_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = false) }
-        TransportButton(LucideIcons.ChevronRight.glyph(), "Go to Next Marker", "pro_program_next_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = true) }
+        TransportButton(ed, "markIn", ProGlyphs.MarkIn, "Mark In", "pro_program_mark_in", has) { ed.markIn() }
+        TransportButton(ed, "markOut", ProGlyphs.MarkOut, "Mark Out", "pro_program_mark_out", has) { ed.markOut() }
+        TransportButton(ed, "goToIn", ProGlyphs.GoToIn, "Go to In", "pro_program_go_to_in", ed.pro?.markIn != null) { ed.goToIn() }
+        TransportButton(ed, "stepBack", Glyphs.StepBack, "Step Back 1 Frame", "editor_previous_frame_button", has) { ed.step(-1) }
+        TransportButton(ed, "play", if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Stop" else "Play", "editor_play_button", has) { ed.togglePlay() }
+        TransportButton(ed, "stepForward", Glyphs.StepForward, "Step Forward 1 Frame", "editor_next_frame_button", has) { ed.step(1) }
+        TransportButton(ed, "goToOut", ProGlyphs.GoToOut, "Go to Out", "pro_program_go_to_out", ed.pro?.markOut != null) { ed.goToOut() }
+        TransportButton(ed, "addMarker", ProGlyphs.Marker, "Add Marker", "pro_program_add_marker", has) { ed.addMarker() }
+        TransportButton(ed, "prevMarker", LucideIcons.ChevronLeft.glyph(), "Go to Previous Marker", "pro_program_prev_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = false) }
+        TransportButton(ed, "nextMarker", LucideIcons.ChevronRight.glyph(), "Go to Next Marker", "pro_program_next_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = true) }
         val inOut = ed.pro?.markIn != null || ed.pro?.markOut != null
-        TextButton44("Lift", "pro_program_lift", inOut) { ed.liftExtract(extract = false) }
-        TextButton44("Extract", "pro_program_extract", inOut) { ed.liftExtract(extract = true) }
-        TextButton44(if (ed.safeMargins) "Safe Margins ✓" else "Safe Margins", "pro_program_safe_margins", true) { ed.safeMargins = !ed.safeMargins }
+        TextButton44(ed, "lift", "Lift", "pro_program_lift", inOut) { ed.liftExtract(extract = false) }
+        TextButton44(ed, "extract", "Extract", "pro_program_extract", inOut) { ed.liftExtract(extract = true) }
+        TextButton44(ed, "safeMargins", if (ed.safeMargins) "Safe Margins ✓" else "Safe Margins", "pro_program_safe_margins", true) { ed.safeMargins = !ed.safeMargins }
         val res = when {
             ed.playbackScale >= 1f -> "Full"
             ed.playbackScale >= 0.5f -> "1/2"
             else -> "1/4"
         }
-        TextButton44("Resolution: $res", "pro_program_resolution", true) {
+        TextButton44(ed, "resolution", "Resolution: $res", "pro_program_resolution", true) {
             ed.playbackScale = when {
                 ed.playbackScale >= 1f -> 0.5f
                 ed.playbackScale >= 0.5f -> 0.25f
@@ -351,8 +351,8 @@ private fun ProTransport(ed: EditorController) {
 }
 
 @Composable
-private fun TransportButton(glyph: Glyph, description: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
-    FcIconButton(glyph, description, onClick, enabled = enabled, size = 44.dp, iconSize = 22.dp, modifier = Modifier.testTag(tag))
+private fun TransportButton(ed: EditorController, help: String, glyph: Glyph, description: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
+    HelpIconButton(ed, glyph, description, help, tag, enabled, onClick = onClick)
 }
 
 /** A row of panel tabs (44 dp high). */
@@ -406,15 +406,15 @@ private fun SourceMonitor(ed: EditorController, modifier: Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val has = src != null
-            TransportButton(ProGlyphs.MarkIn, "Mark In", "pro_source_mark_in", has) { ed.sourceMarkIn() }
-            TransportButton(ProGlyphs.MarkOut, "Mark Out", "pro_source_mark_out", has) { ed.sourceMarkOut() }
-            TransportButton(Glyphs.StepBack, "Step Back 1 Frame", "pro_source_step_back", has) { ed.stepSource(-1) }
-            TransportButton(if (ed.sourcePlaying) Glyphs.Pause else Glyphs.Play, if (ed.sourcePlaying) "Stop" else "Play", "pro_source_play", has) { ed.toggleSourcePlay() }
-            TransportButton(Glyphs.StepForward, "Step Forward 1 Frame", "pro_source_step_forward", has) { ed.stepSource(1) }
-            TextButton44("Insert", "pro_source_insert", has) { ed.sourceEdit(overwrite = false) }
-            TextButton44("Overwrite", "pro_source_overwrite", has) { ed.sourceEdit(overwrite = true) }
-            TextButton44("Clear In/Out", "pro_source_clear_in_out", src?.markIn != null || src?.markOut != null) { ed.sourceClearInOut() }
-            TransportButton(LucideIcons.X.glyph(), "Close Source", "pro_source_close", has) { ed.closeSource() }
+            TransportButton(ed, "sourceMarkIn", ProGlyphs.MarkIn, "Mark In", "pro_source_mark_in", has) { ed.sourceMarkIn() }
+            TransportButton(ed, "sourceMarkOut", ProGlyphs.MarkOut, "Mark Out", "pro_source_mark_out", has) { ed.sourceMarkOut() }
+            TransportButton(ed, "stepBack", Glyphs.StepBack, "Step Back 1 Frame", "pro_source_step_back", has) { ed.stepSource(-1) }
+            TransportButton(ed, "sourcePlay", if (ed.sourcePlaying) Glyphs.Pause else Glyphs.Play, if (ed.sourcePlaying) "Stop" else "Play", "pro_source_play", has) { ed.toggleSourcePlay() }
+            TransportButton(ed, "stepForward", Glyphs.StepForward, "Step Forward 1 Frame", "pro_source_step_forward", has) { ed.stepSource(1) }
+            TextButton44(ed, "insert", "Insert", "pro_source_insert", has) { ed.sourceEdit(overwrite = false) }
+            TextButton44(ed, "overwrite", "Overwrite", "pro_source_overwrite", has) { ed.sourceEdit(overwrite = true) }
+            TextButton44(ed, "sourceClear", "Clear In/Out", "pro_source_clear_in_out", src?.markIn != null || src?.markOut != null) { ed.sourceClearInOut() }
+            TransportButton(ed, "sourceClose", LucideIcons.X.glyph(), "Close Source", "pro_source_close", has) { ed.closeSource() }
         }
     }
 }
@@ -456,12 +456,12 @@ private fun SourceScrubber(ed: EditorController, src: io.github.artcraftandroid.
 }
 
 @Composable
-private fun TextButton44(label: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
+private fun TextButton44(ed: EditorController, help: String, label: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .height(44.dp)
             .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .helpClick(ed, help, enabled, onClick = onClick)
             .padding(horizontal = 10.dp)
             .testTag(tag),
         contentAlignment = Alignment.Center,
@@ -481,7 +481,7 @@ private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
         Row(Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Project: ${ed.project.name}", style = FcType.Caption, color = Fc.Title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             Box {
-                TextButton44("Import", "pro_project_import", true) { importing = true }
+                TextButton44(ed, "import", "Import", "pro_project_import", true) { importing = true }
                 DropdownMenu(expanded = importing, onDismissRequest = { importing = false }, containerColor = Fc.Panel) {
                     for ((label, kind) in listOf("Photos and videos" to PickKind.PhotosAndVideos, "Files" to PickKind.FilesVisual, "Sounds" to PickKind.FilesAudio)) {
                         DropdownMenuItem(text = { Text(label, style = FcType.Body, color = Fc.Body) }, onClick = {
@@ -592,7 +592,7 @@ private fun ToolButton(ed: EditorController, t: ProTool, modifier: Modifier) {
             .padding(2.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(if (on) Fc.Accent else Color.Transparent)
-            .clickable(role = Role.RadioButton) { ed.proTool = t }
+            .helpClick(ed, "tool.${t.name}", role = Role.RadioButton) { ed.proTool = t }
             .testTag("pro_tool_${t.name.lowercase()}")
             .semantics {
                 contentDescription = "${t.label} tool (${t.key})"

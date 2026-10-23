@@ -217,22 +217,9 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                         }
                         Ruler(
                             ed, p, ::xOf, ::tOf,
-                            onMenu = { at, t ->
+                            onMarker = { at ->
                                 val near = with(density) { 16.dp.toPx() }
-                                val marker = p.markers.minByOrNull { abs(xOf(it.start) - at.x) }?.takeIf { abs(xOf(it.start) - at.x) < near }
-                                if (marker != null) {
-                                    editingMarker = marker
-                                } else {
-                                    menu = ProMenu(
-                                        at + Offset(headerPx, touchPx),
-                                        listOf(
-                                            "Mark In" to { ed.markIn(t) },
-                                            "Mark Out" to { ed.markOut(t) },
-                                            "Add Marker" to { ed.addMarker(t) },
-                                            "Clear In and Out" to { ed.clearInOut() },
-                                        ),
-                                    )
-                                }
+                                p.markers.minByOrNull { abs(xOf(it.start) - at.x) }?.takeIf { abs(xOf(it.start) - at.x) < near }?.let { editingMarker = it }
                             },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
@@ -366,29 +353,29 @@ private fun TimelineBar(ed: EditorController, p: ProTimeline?, compact: Boolean,
         val snapping = p?.snapping == true
         val linked = p?.linkedSelection == true
         val slot = Modifier.weight(1f).widthIn(max = Touch).fillMaxHeight()
-        BarToggle(ProGlyphs.Magnet, "Snap in Timeline", snapping, "pro_snap", slot) { ed.setSnapping(!snapping) }
-        BarToggle(ProGlyphs.Link, "Linked Selection", linked, "pro_linked_selection", slot) { ed.setLinkedSelection(!linked) }
-        BarButton(ProGlyphs.Marker, "Add Marker", "pro_add_marker", slot) { ed.addMarker() }
-        BarButton(LucideIcons.Plus.glyph(), "Add Tracks", "pro_add_tracks", slot) {
+        BarToggle(ed, "snap", ProGlyphs.Magnet, "Snap in Timeline", snapping, "pro_snap", slot) { ed.setSnapping(!snapping) }
+        BarToggle(ed, "linked", ProGlyphs.Link, "Linked Selection", linked, "pro_linked_selection", slot) { ed.setLinkedSelection(!linked) }
+        BarButton(ed, "addMarker", ProGlyphs.Marker, "Add Marker", "pro_add_marker", slot) { ed.addMarker() }
+        BarButton(ed, "addTracks", LucideIcons.Plus.glyph(), "Add Tracks", "pro_add_tracks", slot) {
             onMenu(listOf("Add Video Track" to { ed.addTracks(1, 0) }, "Add Audio Track" to { ed.addTracks(0, 1) }, "Add Video and Audio Track" to { ed.addTracks(1, 1) }))
         }
-        BarButton(ProGlyphs.Fit, "Zoom to Sequence", "pro_zoom_fit", slot) {
+        BarButton(ed, "zoomFit", ProGlyphs.Fit, "Zoom to Sequence", "pro_zoom_fit", slot) {
             ed.proPxPerSecond = 0f
             ed.proScroll = 0L
         }
-        BarButton(ProGlyphs.MarkIn, "Mark In", "pro_mark_in", slot) { ed.markIn() }
-        BarButton(ProGlyphs.MarkOut, "Mark Out", "pro_mark_out", slot) { ed.markOut() }
+        BarButton(ed, "markIn", ProGlyphs.MarkIn, "Mark In", "pro_mark_in", slot) { ed.markIn() }
+        BarButton(ed, "markOut", ProGlyphs.MarkOut, "Mark Out", "pro_mark_out", slot) { ed.markOut() }
     }
 }
 
 @Composable
-private fun BarToggle(glyph: Glyph, description: String, on: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
+private fun BarToggle(ed: EditorController, help: String, glyph: Glyph, description: String, on: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
         modifier
             .padding(2.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (on) Fc.Accent.copy(alpha = 0.35f) else Color.Transparent)
-            .clickable(role = Role.Switch, onClick = onClick)
+            .helpClick(ed, help, role = Role.Switch, onClick = onClick)
             .testTag(tag)
             .semantics {
                 contentDescription = description
@@ -401,9 +388,9 @@ private fun BarToggle(glyph: Glyph, description: String, on: Boolean, tag: Strin
 }
 
 @Composable
-private fun BarButton(glyph: Glyph, description: String, tag: String, modifier: Modifier, onClick: () -> Unit) {
+private fun BarButton(ed: EditorController, help: String, glyph: Glyph, description: String, tag: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        modifier.clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, onClick = onClick).testTag(tag).semantics { contentDescription = description },
+        modifier.clip(RoundedCornerShape(8.dp)).helpClick(ed, help, onClick = onClick).testTag(tag).semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
         GlyphIcon(glyph, Fc.Icon, size = 20.dp)
@@ -417,44 +404,41 @@ private fun Ruler(
     p: ProTimeline,
     xOf: (Long) -> Float,
     tOf: (Float) -> Long,
-    onMenu: (Offset, Long) -> Unit,
+    onMarker: (Offset) -> Unit,
     modifier: Modifier,
 ) {
     val measurer = rememberTextMeasurer()
-    val haptic = LocalHapticFeedback.current
     val tAt by rememberUpdatedState(tOf)
-    val menuAt by rememberUpdatedState(onMenu)
+    val markerAt by rememberUpdatedState(onMarker)
+    // the last tap (time, place), for a double tap on a marker
+    var lastTap by remember { mutableStateOf<Pair<Long, Offset>?>(null) }
     Canvas(
         modifier
             .background(Fc.Panel)
             .clipToBounds()
             .pointerInput(Unit) {
+                // a touch moves the playhead there and a drag scrubs; a double tap on a marker opens it
                 awaitEachGesture {
                     val down = awaitFirstDown()
-                    val t0 = tAt(down.position.x)
-                    val moved = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                        var m = false
-                        while (true) {
-                            val c = awaitPointerEvent().changes.firstOrNull() ?: break
-                            if (!c.pressed) break
-                            if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) m = true
-                            if (m) {
-                                c.consume()
-                                ed.seek(tAt(c.position.x))
-                            }
-                        }
-                        m
+                    val double = lastTap?.let { (t, at) -> down.uptimeMillis - t < viewConfiguration.doubleTapTimeoutMillis && (at - down.position).getDistance() < 24.dp.toPx() } == true
+                    if (double) {
+                        lastTap = null
+                        markerAt(down.position)
+                    } else {
+                        ed.seek(tAt(down.position.x))
                     }
-                    when (moved) {
-                        null -> {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            menuAt(down.position, t0)
-                            // swallow the rest of the press
-                            while (awaitPointerEvent().changes.any { it.pressed }) Unit
+                    var moved = false
+                    while (true) {
+                        val c = awaitPointerEvent().changes.firstOrNull() ?: break
+                        if (!c.pressed) break
+                        if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                        if (moved) {
+                            c.consume()
+                            ed.seek(tAt(c.position.x))
                         }
-                        false -> ed.seek(t0, draft = false)
-                        true -> ed.settle()
                     }
+                    if (!double) lastTap = if (moved) null else down.uptimeMillis to down.position
+                    ed.settle()
                 }
             }
             .semantics { contentDescription = "Timecode ruler" },
@@ -534,7 +518,7 @@ private fun TrackHeader(ed: EditorController, t: ProTrack, compact: Boolean, hei
             .pointerInput(t.id) {
                 // a long press opens the track's menu; a drag scrolls the tracks
                 awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val down = awaitFirstDown()
                     var moved = false
                     val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                         while (true) {
@@ -576,7 +560,7 @@ private fun TrackHeader(ed: EditorController, t: ProTrack, compact: Boolean, hei
                     Modifier
                         .width(36.dp)
                         .height(Touch)
-                        .clickable(role = Role.Switch) { ed.setSourcePatch(t.id, !t.sourcePatched) }
+                        .helpClick(ed, "patch", role = Role.Switch) { ed.setSourcePatch(t.id, !t.sourcePatched) }
                         .testTag("pro_patch_${t.code}")
                         .semantics {
                             contentDescription = "Source patching for ${t.code}"
@@ -599,7 +583,7 @@ private fun TrackHeader(ed: EditorController, t: ProTrack, compact: Boolean, hei
                 Modifier
                     .width(if (compact) Touch else 48.dp)
                     .height(Touch)
-                    .clickable(role = Role.Switch) { ed.setTargeted(t.id, !t.targeted) }
+                    .helpClick(ed, "target", role = Role.Switch) { ed.setTargeted(t.id, !t.targeted) }
                     .testTag("pro_target_${t.code}")
                     .semantics {
                         contentDescription = "Target ${t.code}"
@@ -616,19 +600,19 @@ private fun TrackHeader(ed: EditorController, t: ProTrack, compact: Boolean, hei
                     Text(t.code, style = FcType.Caption, color = if (t.targeted) Color.White else Fc.Body)
                 }
             }
-            HeaderSwitch(if (t.locked) ProGlyphs.Lock else ProGlyphs.Unlock, "Lock ${t.code}", t.locked, "pro_lock_${t.code}") {
+            HeaderSwitch(ed, "lock", if (t.locked) ProGlyphs.Lock else ProGlyphs.Unlock, "Lock ${t.code}", t.locked, "pro_lock_${t.code}") {
                 ed.setTrack(t.id, TrackSwitches(locked = !t.locked))
             }
             if (t.video) {
-                HeaderSwitch(if (t.output) ProGlyphs.Eye else ProGlyphs.EyeOff, "Toggle track output ${t.code}", !t.output, "pro_output_${t.code}") {
+                HeaderSwitch(ed, "output", if (t.output) ProGlyphs.Eye else ProGlyphs.EyeOff, "Toggle track output ${t.code}", !t.output, "pro_output_${t.code}") {
                     ed.setTrack(t.id, TrackSwitches(output = !t.output))
                 }
             } else {
-                HeaderLetter("M", "Mute ${t.code}", t.muted, Color(0xFF3FAE5A), "pro_mute_${t.code}") { ed.setTrack(t.id, TrackSwitches(muted = !t.muted)) }
+                HeaderLetter(ed, "mute", "M", "Mute ${t.code}", t.muted, Color(0xFF3FAE5A), "pro_mute_${t.code}") { ed.setTrack(t.id, TrackSwitches(muted = !t.muted)) }
             }
             if (!compact) {
-                if (!t.video) HeaderLetter("S", "Solo ${t.code}", t.solo, Color(0xFFE8C33F), "pro_solo_${t.code}") { ed.setTrack(t.id, TrackSwitches(solo = !t.solo)) }
-                HeaderSwitch(if (t.syncLock) ProGlyphs.SyncLock else ProGlyphs.SyncOff, "Sync lock ${t.code}", t.syncLock, "pro_sync_${t.code}") {
+                if (!t.video) HeaderLetter(ed, "solo", "S", "Solo ${t.code}", t.solo, Color(0xFFE8C33F), "pro_solo_${t.code}") { ed.setTrack(t.id, TrackSwitches(solo = !t.solo)) }
+                HeaderSwitch(ed, "sync", if (t.syncLock) ProGlyphs.SyncLock else ProGlyphs.SyncOff, "Sync lock ${t.code}", t.syncLock, "pro_sync_${t.code}") {
                     ed.setTrack(t.id, TrackSwitches(syncLock = !t.syncLock))
                 }
             }
@@ -657,11 +641,11 @@ private fun TrackHeader(ed: EditorController, t: ProTrack, compact: Boolean, hei
 }
 
 @Composable
-private fun HeaderSwitch(glyph: Glyph, description: String, on: Boolean, tag: String, onClick: () -> Unit) {
+private fun HeaderSwitch(ed: EditorController, help: String, glyph: Glyph, description: String, on: Boolean, tag: String, onClick: () -> Unit) {
     Box(
         Modifier
             .size(Touch)
-            .clickable(role = Role.Switch, onClick = onClick)
+            .helpClick(ed, help, role = Role.Switch, onClick = onClick)
             .testTag(tag)
             .semantics {
                 contentDescription = description
@@ -674,11 +658,11 @@ private fun HeaderSwitch(glyph: Glyph, description: String, on: Boolean, tag: St
 }
 
 @Composable
-private fun HeaderLetter(letter: String, description: String, on: Boolean, lit: Color, tag: String, onClick: () -> Unit) {
+private fun HeaderLetter(ed: EditorController, help: String, letter: String, description: String, on: Boolean, lit: Color, tag: String, onClick: () -> Unit) {
     Box(
         Modifier
             .size(Touch)
-            .clickable(role = Role.Switch, onClick = onClick)
+            .helpClick(ed, help, role = Role.Switch, onClick = onClick)
             .testTag(tag)
             .semantics {
                 contentDescription = description

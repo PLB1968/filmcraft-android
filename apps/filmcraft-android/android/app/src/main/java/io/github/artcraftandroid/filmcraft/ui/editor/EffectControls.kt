@@ -119,7 +119,7 @@ private fun EffectSection(ed: EditorController, clip: ProClip, e: EffectInfo) {
             Box(
                 Modifier
                     .size(44.dp)
-                    .clickable(role = Role.Switch) { ed.toggleEffect(e) }
+                    .helpClick(ed, "fx", role = Role.Switch) { ed.toggleEffect(e) }
                     .testTag("pro_fx_switch_${e.id}")
                     .semantics {
                         contentDescription = "Turn ${e.name} ${if (e.enabled) "off" else "on"}"
@@ -132,7 +132,7 @@ private fun EffectSection(ed: EditorController, clip: ProClip, e: EffectInfo) {
             Text(e.name, style = FcType.Label.copy(fontSize = 15.sp), color = if (e.enabled) Fc.Title else Fc.Detail, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (!e.fixed) {
                 Box(
-                    Modifier.size(44.dp).clickable(role = Role.Button) { ed.removeEffect(e) }.semantics { contentDescription = "Remove ${e.name}" },
+                    Modifier.size(44.dp).helpClick(ed, "removeEffect") { ed.removeEffect(e) }.semantics { contentDescription = "Remove ${e.name}" },
                     contentAlignment = Alignment.Center,
                 ) { GlyphIcon(LucideIcons.Trash2.glyph(), Fc.Secondary, size = 18.dp) }
             }
@@ -153,7 +153,7 @@ private fun ParamRow(ed: EditorController, clip: ProClip, e: EffectInfo, p: Para
                 Box(
                     Modifier
                         .size(44.dp)
-                        .clickable(role = Role.Switch) { ed.toggleAnimation(e, p) }
+                        .helpClick(ed, "stopwatch", role = Role.Switch) { ed.toggleAnimation(e, p) }
                         .testTag("pro_stopwatch_${e.id}_${p.id}")
                         .semantics {
                             contentDescription = "Toggle animation of ${p.name}"
@@ -187,9 +187,9 @@ private fun ParamRow(ed: EditorController, clip: ProClip, e: EffectInfo, p: Para
         if (p.animated) {
             Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
                 val onKey = p.keyframes.any { abs(it.time - ed.playhead) < TimelineMath.tickOfFrame(1, ed.rateNum, ed.rateDen) }
-                SmallButton(LucideIcons.ChevronLeft.glyph(), "Go to Previous Keyframe", "pro_kf_prev_${p.id}", p.keyframes.any { it.time < ed.playhead }) { ed.goToKeyframe(p, next = false) }
-                SmallButton(ProGlyphs.Keyframe, if (onKey) "Remove Keyframe" else "Add Keyframe", "pro_kf_toggle_${p.id}", true, lit = onKey) { ed.toggleKeyframe(e, p) }
-                SmallButton(LucideIcons.ChevronRight.glyph(), "Go to Next Keyframe", "pro_kf_next_${p.id}", p.keyframes.any { it.time > ed.playhead }) { ed.goToKeyframe(p, next = true) }
+                SmallButton(ed, "kfPrev", LucideIcons.ChevronLeft.glyph(), "Go to Previous Keyframe", "pro_kf_prev_${p.id}", p.keyframes.any { it.time < ed.playhead }) { ed.goToKeyframe(p, next = false) }
+                SmallButton(ed, "kfToggle", ProGlyphs.Keyframe, if (onKey) "Remove Keyframe" else "Add Keyframe", "pro_kf_toggle_${p.id}", true, lit = onKey) { ed.toggleKeyframe(e, p) }
+                SmallButton(ed, "kfNext", LucideIcons.ChevronRight.glyph(), "Go to Next Keyframe", "pro_kf_next_${p.id}", p.keyframes.any { it.time > ed.playhead }) { ed.goToKeyframe(p, next = true) }
                 KeyframeStrip(ed, clip, e, p, Modifier.weight(1f).height(32.dp))
             }
         }
@@ -197,9 +197,9 @@ private fun ParamRow(ed: EditorController, clip: ProClip, e: EffectInfo, p: Para
 }
 
 @Composable
-private fun SmallButton(glyph: Glyph, description: String, tag: String, enabled: Boolean, lit: Boolean = false, onClick: () -> Unit) {
+private fun SmallButton(ed: EditorController, help: String, glyph: Glyph, description: String, tag: String, enabled: Boolean, lit: Boolean = false, onClick: () -> Unit) {
     Box(
-        Modifier.size(44.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick).testTag(tag).semantics { contentDescription = description },
+        Modifier.size(44.dp).helpClick(ed, help, enabled, onClick = onClick).testTag(tag).semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
         GlyphIcon(glyph, if (!enabled) Fc.Disabled else if (lit) Fc.AccentLight else Fc.Icon, size = 18.dp)

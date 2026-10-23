@@ -848,6 +848,9 @@ class EditorController(
 
     var proTool by mutableStateOf(ProTool.Selection)
 
+    /** A button's explanation, shown while set (a long press on a Pro mode button). */
+    var help by mutableStateOf<ProHelp?>(null)
+
     /** What the Program monitor shows while a trim, roll, slip or slide is dragged (null: the program). */
     var trimView by mutableStateOf<TrimView?>(null)
         private set

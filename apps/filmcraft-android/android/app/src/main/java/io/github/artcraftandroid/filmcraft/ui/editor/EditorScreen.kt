@@ -97,6 +97,7 @@ import kotlinx.coroutines.launch
 /** The editor: preview, transport, timeline and tools, stacked or side by side. */
 @Composable
 fun EditorScreen(ed: EditorController) {
+    ed.help?.let { h -> HelpDialog(h) { ed.help = null } }
     if (ed.proMode) {
         ProEditor(ed)
         return
