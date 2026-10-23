@@ -1540,3 +1540,36 @@ fn media_dropped_on_a_double_tapped_spot_overwrites_there_as_one_step() {
     m.set_track(v2, pro::TrackSwitches { locked: Some(true), ..Default::default() }).unwrap();
     assert!(matches!(m.place_media(vec![picture(&d)], v2, 0), Err(MobileError::Command(_))));
 }
+
+#[test]
+fn crossfades_go_on_cuts_and_gaps_close() {
+    let (m, _d, ids) = two_clips();
+    // both: a dissolve on V1 and a crossfade on A1, one undo step
+    m.razor(SEC, Some(ids[0]), None).unwrap();
+    let left = v1(&m)[0].id;
+    assert_eq!(m.crossfade(left, true, true, 0.5).unwrap(), 2);
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.transitions.len(), 2);
+    let v = t.transitions.iter().find(|x| x.track == t.video_tracks[0].id).unwrap();
+    assert_eq!((v.from, v.name.as_str()), (Some(left), "Cross Dissolve"));
+    assert!(v.duration > 0 && v.duration <= SEC / 2 + SEC / 30);
+    assert!(t.transitions.iter().any(|x| x.track == t.audio_tracks[0].id));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Crossfade"));
+    m.undo();
+    assert!(m.pro_timeline().unwrap().transitions.is_empty(), "one step");
+    // picture only, then remove it
+    assert_eq!(m.crossfade(left, true, false, 1.0).unwrap(), 1);
+    let id = m.pro_timeline().unwrap().transitions[0].id;
+    m.remove_transition(id).unwrap();
+    assert!(m.pro_timeline().unwrap().transitions.is_empty());
+    // no cut after the last clip: a message
+    let last = v1(&m).last().unwrap().id;
+    assert!(matches!(m.crossfade(last, true, true, 1.0), Err(MobileError::Command(_))));
+    // a gap closes without a crossfade
+    m.select_clips(vec![ids[1]], false).unwrap();
+    m.pro_move_clip(ids[1], m.pro_timeline().unwrap().video_tracks[0].id, 4 * SEC).unwrap();
+    let v1_id = m.pro_timeline().unwrap().video_tracks[0].id;
+    m.close_gap(v1_id, 3 * SEC).unwrap();
+    assert_eq!(pclip(&m, ids[1]).start, 2 * SEC);
+    assert!(m.pro_timeline().unwrap().transitions.is_empty());
+}

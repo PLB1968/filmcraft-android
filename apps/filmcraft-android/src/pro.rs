@@ -100,6 +100,20 @@ pub struct ProTimeline {
     pub markers: Vec<ProMarker>,
     pub snapping: bool,
     pub linked_selection: bool,
+    /// Transitions on every track (crossfades on cuts, fades at clip ends).
+    pub transitions: Vec<ProTransition>,
+}
+
+/// A transition on a track: a crossfade on a cut (`from` and `to`), or a fade at one end.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProTransition {
+    pub id: u64,
+    pub track: u64,
+    pub from: Option<u64>,
+    pub to: Option<u64>,
+    pub start: i64,
+    pub duration: i64,
+    pub name: String,
 }
 
 /// The marker colours, in the desktop's order.
@@ -210,6 +224,22 @@ pub(crate) fn timeline(s: &Session) -> Result<ProTimeline, MobileError> {
             .collect(),
         snapping: s.state.snapping,
         linked_selection: s.state.linked_selection,
+        transitions: seq
+            .video_tracks
+            .iter()
+            .chain(&seq.audio_tracks)
+            .flat_map(|t| {
+                t.transitions.iter().map(|tr| ProTransition {
+                    id: tr.id.0,
+                    track: t.id.0,
+                    from: tr.from.map(|c| c.0),
+                    to: tr.to.map(|c| c.0),
+                    start: tr.start.0,
+                    duration: tr.duration.0,
+                    name: tr.effect.def().map(|d| d.name.to_string()).unwrap_or_default(),
+                })
+            })
+            .collect(),
     })
 }
 
@@ -1006,4 +1036,58 @@ pub(crate) fn place_media(s: &mut Session, paths: &[String], track: u64, time: i
         Ok(out)
     })?;
     Ok(r)
+}
+
+// ---- crossfades on cuts, and closing gaps ----
+
+/// Whether clip `c` on its track has a neighbour starting exactly where it ends (a cut).
+fn has_cut_after(seq: &Sequence, c: ClipId) -> bool {
+    model::find(seq, c).is_some_and(|f| {
+        let tracks = if f.kind == TrackKind::Video { &seq.video_tracks } else { &seq.audio_tracks };
+        tracks.get(f.track).is_some_and(|t| t.items.iter().any(|o| o.id != c && o.start == f.clip.end()))
+    })
+}
+
+/// Put a crossfade on the cut after clip `left`: a Cross Dissolve on the picture (`video`) and/or
+/// a Constant Power crossfade on the sound (`audio`), `seconds` long (shorter when the clips have
+/// too little footage beyond the cut). One undo step; returns how many crossfades were added.
+pub(crate) fn crossfade(s: &mut Session, left: u64, video: bool, audio: bool, seconds: f64) -> Result<u32, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let f = model::find(seq, ClipId(left)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?;
+    // the picture and the sound of the clip before the cut
+    let (v, a) = match f.kind {
+        TrackKind::Video => (Some(f.clip.id), model::partner(seq, f.clip, TrackKind::Audio).map(|x| x.clip.id)),
+        TrackKind::Audio => (model::partner(seq, f.clip, TrackKind::Video).map(|x| x.clip.id), Some(f.clip.id)),
+    };
+    let v = v.filter(|c| video && has_cut_after(seq, *c));
+    let a = a.filter(|c| audio && has_cut_after(seq, *c));
+    if v.is_none() && a.is_none() {
+        return Err(MobileError::Command("There's no cut there to crossfade: the next clip must start right where this one ends.".into()));
+    }
+    let frame = s.sequence_rate().tick_of(1).0.max(1);
+    let frames = ((seconds.clamp(0.04, 30.0) * filmcraft_time::TICKS_PER_SECOND as f64) / frame as f64).round().max(1.0) as i64;
+    let n = s.edit_group("Crossfade", |s| {
+        let mut n = 0;
+        if let Some(c) = v {
+            s.execute("sequence.applyVideoTransition", json!({"clip": c.0, "edge": "out", "effect": "cross_dissolve", "frames": frames}))?;
+            n += 1;
+        }
+        if let Some(c) = a {
+            s.execute("sequence.applyAudioTransition", json!({"clip": c.0, "edge": "out", "effect": "constant_power", "frames": frames}))?;
+            n += 1;
+        }
+        Ok(n)
+    })?;
+    Ok(n)
+}
+
+pub(crate) fn remove_transition(s: &mut Session, transition: u64) -> Result<(), MobileError> {
+    ex(s, "sequence.removeTransition", json!({"transitions": [transition]}))?;
+    Ok(())
+}
+
+/// Close the gap on `track` at `time`: the clips after it move back to meet the clip before.
+pub(crate) fn close_gap(s: &mut Session, track: u64, time: i64) -> Result<(), MobileError> {
+    ex(s, "sequence.closeGap", json!({"track": track, "time": time.max(0)}))?;
+    Ok(())
 }

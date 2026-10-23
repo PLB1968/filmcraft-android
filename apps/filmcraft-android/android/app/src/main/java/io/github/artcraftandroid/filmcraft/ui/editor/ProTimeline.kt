@@ -261,6 +261,33 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 menu = ProMenu(at + Offset(headerPx, tracksTop), if (clip != null) clipMenu(ed, clip) else laneMenu(ed))
                             },
+                            onCut = { at, left, right ->
+                                val pos = at + Offset(headerPx, tracksTop)
+                                // the crossfades already on this cut (the picture's and its sound's)
+                                val partners = p.clips.filter { left.link != null && it.link == left.link }.map { it.id }.toSet() + left.id
+                                val existing = p.transitions.filter { tr -> tr.from?.let { it in partners } == true && tr.to != null }
+                                fun lengths(video: Boolean, audio: Boolean) {
+                                    menu = ProMenu(
+                                        pos,
+                                        listOf(0.5 to "0.5 seconds", 1.0 to "1 second", 2.0 to "2 seconds").map { (secs, label) ->
+                                            label to { ed.crossfade(left, video, audio, secs) }
+                                        },
+                                    )
+                                }
+                                menu = ProMenu(
+                                    pos,
+                                    buildList<Pair<String, () -> Unit>> {
+                                        add("Crossfade Video…" to { lengths(video = true, audio = false) })
+                                        add("Crossfade Audio…" to { lengths(video = false, audio = true) })
+                                        add("Crossfade Video and Audio…" to { lengths(video = true, audio = true) })
+                                        if (existing.isNotEmpty()) add("Remove Crossfade" to { existing.forEach { ed.removeTransition(it.id) } })
+                                        if (right.id != left.id) add("Select ${right.name.ifBlank { "Next Clip" }}" to { ed.proSelect(right.id) })
+                                    },
+                                )
+                            },
+                            onGap = { at, track, t ->
+                                menu = ProMenu(at + Offset(headerPx, tracksTop), listOf("Close Gap" to { ed.closeGap(track.id, t) }))
+                            },
                             onAddMedia = { at, track, t ->
                                 val where = "${track.code} at ${TimelineMath.timecode(t, num, den)}"
                                 menu = ProMenu(
@@ -880,8 +907,12 @@ private fun Tracks(
     onZoom: (Float, Float) -> Unit,
     onMenu: (Offset, ProClip?) -> Unit,
     onAddMedia: (Offset, ProTrack, Long) -> Unit,
+    onCut: (Offset, ProClip, ProClip) -> Unit,
+    onGap: (Offset, ProTrack, Long) -> Unit,
     modifier: Modifier,
 ) {
+    val cutAt by rememberUpdatedState(onCut)
+    val gapAt by rememberUpdatedState(onGap)
     val measurer = rememberTextMeasurer()
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
@@ -1014,7 +1045,23 @@ private fun Tracks(
                                 ProTool.Zoom -> zoom(0.5f, x)
                                 ProTool.Razor -> ed.proRazor(frameAt(x), null, null)
                                 ProTool.TrackSelectForward -> ed.proSelectForward(null, tAt(x))
-                                else -> menuAt(down.position, hit)
+                                else -> {
+                                    val row = hitRow
+                                    val onRow = if (row == null) emptyList() else p0.clips.filter { it.track == row.track.id }.sortedBy { it.start }
+                                    val frame = TimelineMath.tickOfFrame(1, p0.rateNum, p0.rateDen)
+                                    // a cut (one clip ending where the next begins) within reach of the finger
+                                    val cut = onRow.zipWithNext().filter { (a, b) -> abs(a.start + a.duration - b.start) < frame }
+                                        .minByOrNull { (a, _) -> abs(xAt(a.start + a.duration) - x) }
+                                        ?.takeIf { (a, _) -> abs(xAt(a.start + a.duration) - x) < 16.dp.toPx() }
+                                    val t = tAt(x)
+                                    // empty space with a clip on each side
+                                    val gap = row != null && hit == null && onRow.any { it.start + it.duration <= t } && onRow.any { it.start > t }
+                                    when {
+                                        cut != null && row?.track?.locked != true -> cutAt(down.position, cut.first, cut.second)
+                                        gap && row != null && !row.track.locked -> gapAt(down.position, row.track, t)
+                                        else -> menuAt(down.position, hit)
+                                    }
+                                }
                             }
                             while (true) {
                                 val ev = awaitPointerEvent()
@@ -1113,6 +1160,17 @@ private fun Tracks(
                 if (dr != null && dr.kind == DragKind.Slip && c.id == dr.clip.id) {
                     drawClip(c, r, xOf(c.start), xOf(c.start + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
                 }
+            }
+            // crossfades and fades: a light band with a diagonal, over the cut
+            for (tr in p.transitions) {
+                val r = rowOf[tr.track] ?: continue
+                val x0 = xOf(tr.start)
+                val x1 = xOf(tr.start + tr.duration)
+                if (x1 < 0f || x0 > w) continue
+                val top = r.top + 2.dp.toPx()
+                val bottom = r.bottom - 2.dp.toPx()
+                drawRect(Color.White.copy(alpha = 0.28f), Offset(x0, top), Size(max(2f, x1 - x0), bottom - top))
+                drawLine(Color.White.copy(alpha = 0.8f), Offset(x0, bottom), Offset(x1, top), 1.5.dp.toPx())
             }
             // locked tracks: hatched
             for (r in rows.filter { it.track.locked }) {

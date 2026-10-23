@@ -873,6 +873,20 @@ impl MobileSession {
         self.main_edit(|s| pro::place_media(s, &paths, track, time))
     }
 
+    /// A crossfade on the cut after clip `left`: picture and/or sound, `seconds` long.
+    pub fn crossfade(&self, left: u64, video: bool, audio: bool, seconds: f64) -> Result<u32, MobileError> {
+        self.main_edit(|s| pro::crossfade(s, left, video, audio, seconds))
+    }
+
+    pub fn remove_transition(&self, transition: u64) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::remove_transition(s, transition))
+    }
+
+    /// Close the gap on `track` at `time`.
+    pub fn close_gap(&self, track: u64, time: i64) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::close_gap(s, track, time))
+    }
+
     // ---- export ----
 
     pub fn export_plan(&self, settings: ExportSettings) -> Result<ExportPlan, MobileError> {

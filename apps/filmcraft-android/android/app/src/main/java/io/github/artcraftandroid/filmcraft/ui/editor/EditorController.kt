@@ -1020,6 +1020,11 @@ class EditorController(
         }
     }
 
+    /** A crossfade on the cut after [left]: picture and/or sound, [seconds] long. */
+    fun crossfade(left: ProClip, video: Boolean, audio: Boolean, seconds: Double) = edit { crossfade(left.id, video, audio, seconds) }
+    fun removeTransition(id: ULong) = edit { removeTransition(id) }
+    fun closeGap(track: ULong, at: Long) = edit { closeGap(track, at) }
+
     /** Import files into the Project panel without putting them on the timeline. */
     fun importToBin(kind: PickKind) {
         host.pick(kind) { uris ->
