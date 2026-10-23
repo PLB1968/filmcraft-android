@@ -1390,3 +1390,125 @@ fn lift_leaves_a_gap_and_extract_closes_it() {
     assert_eq!(v[1].source_in, SEC, "the rest of the second clip closes up");
     assert!(v.iter().all(|c| c.id != ids[0] || c.duration == SEC));
 }
+
+// ---- Pro mode: Effect Controls and keyframes ----
+
+fn fx<'a>(e: &'a [pro::EffectInfo], id: &str) -> &'a pro::EffectInfo {
+    e.iter().find(|x| x.id == id).unwrap_or_else(|| panic!("no {id} in {:?}", e.iter().map(|x| &x.id).collect::<Vec<_>>()))
+}
+
+fn prm<'a>(e: &'a pro::EffectInfo, id: &str) -> &'a pro::ParamInfo {
+    e.params.iter().find(|p| p.id == id).unwrap()
+}
+
+#[test]
+fn effect_controls_show_motion_opacity_time_remapping_and_the_sounds_volume() {
+    let (m, _d, ids) = two_clips();
+    let e = m.effect_controls(ids[0]).unwrap();
+    for id in ["motion", "opacity", "time_remap", "volume"] {
+        assert!(fx(&e, id).fixed, "{id}");
+    }
+    let motion = fx(&e, "motion");
+    assert_eq!(motion.clip, ids[0]);
+    let pos = prm(motion, "position");
+    assert_eq!((pos.kind, pos.value.len(), pos.animatable, pos.animated), (pro::ParamType::Point, 2, true, false));
+    // the phone fits media to the frame: a 320×180 clip in a 1080×1920 frame starts at 337.5 %
+    assert_eq!(prm(motion, "scale").value, vec![337.5]);
+    assert_eq!(prm(motion, "rotation").kind, pro::ParamType::Angle);
+    assert_eq!(prm(motion, "anchor").kind, pro::ParamType::Point);
+    let blend = prm(fx(&e, "opacity"), "blend");
+    assert_eq!(blend.kind, pro::ParamType::Choice);
+    assert!(blend.choices.len() > 10 && blend.choices[0] == "Normal", "{:?}", blend.choices);
+    let vol = fx(&e, "volume");
+    assert_ne!(vol.clip, ids[0], "Volume is on the linked sound");
+    assert_eq!(prm(vol, "level").unit, "dB");
+}
+
+#[test]
+fn parameters_change_as_one_undo_step_per_drag_and_reset() {
+    let (m, _d, ids) = two_clips();
+    let motion = fx(&m.effect_controls(ids[0]).unwrap(), "motion").index;
+    let scale0 = prm(fx(&m.effect_controls(ids[0]).unwrap(), "motion"), "scale").value.clone();
+    m.set_effect_param(ids[0], motion, "scale".into(), vec![80.0], true, false).unwrap();
+    m.set_effect_param(ids[0], motion, "scale".into(), vec![50.0], true, false).unwrap();
+    assert_eq!(prm(fx(&m.effect_controls(ids[0]).unwrap(), "motion"), "scale").value, vec![50.0]);
+    m.undo();
+    assert_eq!(prm(fx(&m.effect_controls(ids[0]).unwrap(), "motion"), "scale").value, scale0, "the drag was one step");
+    // two drags, each begun, are two steps
+    m.set_effect_param(ids[0], motion, "scale".into(), vec![90.0], true, true).unwrap();
+    m.set_effect_param(ids[0], motion, "scale".into(), vec![70.0], true, true).unwrap();
+    m.undo();
+    assert_eq!(prm(fx(&m.effect_controls(ids[0]).unwrap(), "motion"), "scale").value, vec![90.0]);
+    m.undo();
+    m.set_effect_param(ids[0], motion, "position".into(), vec![100.0, 200.0], false, false).unwrap();
+    assert_eq!(prm(fx(&m.effect_controls(ids[0]).unwrap(), "motion"), "position").value, vec![100.0, 200.0]);
+    let e = m.effect_controls(ids[0]).unwrap();
+    let op = fx(&e, "opacity");
+    m.set_effect_param(ids[0], op.index, "blend".into(), vec![2.0], false, false).unwrap();
+    assert_eq!(prm(fx(&m.effect_controls(ids[0]).unwrap(), "opacity"), "blend").value, vec![2.0]);
+    m.reset_effect_param(ids[0], motion, "position".into()).unwrap();
+    assert_ne!(prm(fx(&m.effect_controls(ids[0]).unwrap(), "motion"), "position").value, vec![100.0, 200.0]);
+    // the sound's Volume
+    let vol = fx(&m.effect_controls(ids[0]).unwrap(), "volume").clone();
+    m.set_effect_param(vol.clip, vol.index, "level".into(), vec![-6.0], false, false).unwrap();
+    assert_eq!(prm(fx(&m.effect_controls(ids[0]).unwrap(), "volume"), "level").value, vec![-6.0]);
+    // the fx switch
+    m.toggle_effect(ids[0], op.index).unwrap();
+    assert!(!fx(&m.effect_controls(ids[0]).unwrap(), "opacity").enabled);
+    assert!(matches!(m.set_effect_param(ids[0], 99, "scale".into(), vec![1.0], false, false), Err(MobileError::Command(_))));
+}
+
+#[test]
+fn the_stopwatch_keyframes_interpolate_and_show_on_the_clip() {
+    let (m, _d, ids) = two_clips();
+    let op = fx(&m.effect_controls(ids[0]).unwrap(), "opacity").index;
+    let at = |t: i64| {
+        m.set_playhead(t);
+        prm(fx(&m.effect_controls(ids[0]).unwrap(), "opacity"), "opacity").clone()
+    };
+    m.set_playhead(0);
+    m.toggle_animation(ids[0], op, "opacity".into()).unwrap();
+    let p = at(0);
+    assert!(p.animated);
+    assert_eq!(p.keyframes.len(), 1);
+    assert_eq!(p.keyframes[0].time, 0);
+    // a change elsewhere while animated adds a keyframe there
+    m.set_playhead(SEC);
+    m.set_effect_param(ids[0], op, "opacity".into(), vec![20.0], false, false).unwrap();
+    let p = at(SEC / 2);
+    assert_eq!(p.keyframes.iter().map(|k| k.time).collect::<Vec<_>>(), vec![0, SEC]);
+    assert!((p.value[0] - 60.0).abs() < 2.0, "linear halfway: {}", p.value[0]);
+    // the clip shows them on the timeline
+    let c = pclip(&m, ids[0]);
+    assert_eq!(c.keyframes, vec![0, SEC]);
+    // Hold keeps the first value until the next keyframe
+    let first = p.keyframes[0].media_time;
+    m.set_keyframe_interpolation(ids[0], op, "opacity".into(), first, "hold".into()).unwrap();
+    let p = at(SEC / 2);
+    assert_eq!(p.keyframes[0].interpolation, "hold");
+    assert!((p.value[0] - 100.0).abs() < 1e-6);
+    m.set_keyframe_interpolation(ids[0], op, "opacity".into(), first, "bezier".into()).unwrap();
+    assert_eq!(at(0).keyframes[0].interpolation, "bezier");
+    // Add/Remove Keyframe at the playhead takes the one at 1 s away
+    m.set_playhead(SEC);
+    m.toggle_keyframe(ids[0], op, "opacity".into()).unwrap();
+    assert_eq!(at(0).keyframes.len(), 1);
+    // and adds one where there is none
+    m.set_playhead(SEC / 2);
+    m.toggle_keyframe(ids[0], op, "opacity".into()).unwrap();
+    let p = at(0);
+    assert_eq!(p.keyframes.len(), 2);
+    // move it, then delete it
+    let k = p.keyframes[1].media_time;
+    m.move_keyframe(ids[0], op, "opacity".into(), k, k + SEC / 2, false).unwrap();
+    let p = at(0);
+    assert_eq!(p.keyframes[1].time, SEC);
+    m.delete_keyframe(ids[0], op, "opacity".into(), p.keyframes[1].media_time).unwrap();
+    assert_eq!(at(0).keyframes.len(), 1);
+    // the stopwatch off: no keyframes, a plain value
+    m.toggle_animation(ids[0], op, "opacity".into()).unwrap();
+    let p = at(0);
+    assert!(!p.animated && p.keyframes.is_empty());
+    assert!(pclip(&m, ids[0]).keyframes.is_empty());
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Toggle Animation"));
+}

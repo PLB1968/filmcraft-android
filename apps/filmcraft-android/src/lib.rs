@@ -38,7 +38,7 @@ pub mod text;
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use model::TimelineInfo;
 use presets::PresetInfo;
-use pro::{BinItem, ProTimeline, SourceInfo, TrackSwitches};
+use pro::{BinItem, EffectInfo, ProTimeline, SourceInfo, TrackSwitches};
 use render::Renderer;
 use speech::{CaptionLook, CaptionStatus, SpeechAudio, SpeechSettings};
 use text::{Placement, TextStyle};
@@ -818,6 +818,54 @@ impl MobileSession {
     /// Lift (;) or Extract (') the sequence In to Out on the targeted tracks.
     pub fn lift_extract(&self, extract: bool) -> Result<(), MobileError> {
         self.main_edit(|s| pro::lift_extract(s, extract))
+    }
+
+    // ---- Pro mode: Effect Controls and keyframes ----
+
+    /// Effect Controls for a clip: its effects (and its linked sound's), values at the playhead.
+    pub fn effect_controls(&self, clip: u64) -> Result<Vec<EffectInfo>, MobileError> {
+        pro::effect_controls(&self.lock(), clip)
+    }
+
+    /// Set a parameter at the playhead; `merge` folds a drag into one undo step and `begin`
+    /// starts the next one.
+    pub fn set_effect_param(&self, clip: u64, effect: u32, param: String, value: Vec<f64>, merge: bool, begin: bool) -> Result<(), MobileError> {
+        pro::set_param(&mut self.lock(), clip, effect, &param, &value, merge, begin)
+    }
+
+    /// The stopwatch of a parameter.
+    pub fn toggle_animation(&self, clip: u64, effect: u32, param: String) -> Result<(), MobileError> {
+        pro::toggle_animation(&mut self.lock(), clip, effect, &param)
+    }
+
+    /// Add/Remove Keyframe at the playhead.
+    pub fn toggle_keyframe(&self, clip: u64, effect: u32, param: String) -> Result<(), MobileError> {
+        pro::toggle_keyframe(&mut self.lock(), clip, effect, &param)
+    }
+
+    pub fn delete_keyframe(&self, clip: u64, effect: u32, param: String, media_time: i64) -> Result<(), MobileError> {
+        pro::delete_keyframe(&mut self.lock(), clip, effect, &param, media_time)
+    }
+
+    pub fn move_keyframe(&self, clip: u64, effect: u32, param: String, media_time: i64, to: i64, merge: bool) -> Result<(), MobileError> {
+        pro::move_keyframe(&mut self.lock(), clip, effect, &param, media_time, to, merge)
+    }
+
+    /// Linear, Bezier, Hold… for the segment leaving a keyframe.
+    pub fn set_keyframe_interpolation(&self, clip: u64, effect: u32, param: String, media_time: i64, interpolation: String) -> Result<(), MobileError> {
+        pro::set_interpolation(&mut self.lock(), clip, effect, &param, media_time, &interpolation)
+    }
+
+    pub fn reset_effect_param(&self, clip: u64, effect: u32, param: String) -> Result<(), MobileError> {
+        pro::reset_param(&mut self.lock(), clip, effect, &param)
+    }
+
+    pub fn toggle_effect(&self, clip: u64, effect: u32) -> Result<(), MobileError> {
+        pro::toggle_effect(&mut self.lock(), clip, effect)
+    }
+
+    pub fn remove_effect(&self, clip: u64, effect: u32) -> Result<(), MobileError> {
+        pro::remove_effect(&mut self.lock(), clip, effect)
     }
 
     // ---- export ----

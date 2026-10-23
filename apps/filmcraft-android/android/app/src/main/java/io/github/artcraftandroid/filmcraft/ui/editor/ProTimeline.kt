@@ -1158,6 +1158,14 @@ private fun DrawScope.drawClip(
     val dim = if (c.enabled) 1f else 0.45f
     drawRoundRect(fill.copy(alpha = alpha * dim), Offset(x0, top), Size(max(1f, x1 - x0), h), CornerRadius(3.dp.toPx()))
     if (c.selected || ghost) drawRoundRect(Color.White.copy(alpha = alpha), Offset(x0, top), Size(max(1f, x1 - x0), h), CornerRadius(3.dp.toPx()), style = Stroke(2.dp.toPx()))
+    // the clip's keyframes, along its foot
+    if (c.keyframes.isNotEmpty() && c.duration > 0 && h > 20.dp.toPx()) {
+        val y = top + h - 5.dp.toPx()
+        for (k in c.keyframes) {
+            val x = x0 + (k - c.start).toFloat() / c.duration * (x1 - x0)
+            if (x >= x0 && x <= x1) drawKeyframe(Offset(x, y), "linear", Color.White.copy(alpha = alpha), radius = 3.5.dp.toPx())
+        }
+    }
     val left = max(x0, 0f) + 4.dp.toPx()
     val room = (x1 - left - 4.dp.toPx()).toInt()
     if (room > 12.dp.toPx() && h > 14.dp.toPx()) {
