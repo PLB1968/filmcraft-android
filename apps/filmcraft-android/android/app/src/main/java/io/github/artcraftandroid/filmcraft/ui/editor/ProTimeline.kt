@@ -315,6 +315,7 @@ private fun TimelineBar(ed: EditorController, p: ProTimeline?, onMenu: (List<Pai
             style = TextStyle(fontFamily = Inter, fontSize = 18.sp, color = Fc.AccentLight),
             modifier = Modifier.padding(end = 12.dp).testTag("pro_timecode"),
         )
+        Text("${ed.proTool.label} (${ed.proTool.key})", style = FcType.Caption, color = Fc.Secondary, modifier = Modifier.padding(end = 8.dp).testTag("pro_tool_name"))
         val snapping = p?.snapping == true
         val linked = p?.linkedSelection == true
         BarToggle(ProGlyphs.Magnet, "Snap in Timeline", snapping, "pro_snap") { ed.setSnapping(!snapping) }
@@ -684,7 +685,168 @@ private fun laneMenu(ed: EditorController): List<Pair<String, () -> Unit>> = lis
     "Add Marker at Playhead" to { ed.addMarker() },
 )
 
-/** The tracks' clips, the In/Out band and the playhead; and the gestures on them. */
+/** What a one-finger drag on a clip does, by the tool and where it began. */
+private enum class DragKind { Move, Trim, Ripple, Roll, Stretch, Slip, Slide, Forward }
+
+/** A drag on the tracks: what it does, to which clip (and edge), and the clips it takes along. */
+private data class ToolDrag(val kind: DragKind, val clip: ProClip, val head: Boolean, val partner: ProClip? = null, val group: List<ProClip> = emptyList())
+
+/** The clips on [c]'s track that touch it: the one ending where it starts, the one starting where it ends. */
+private fun neighbours(p: ProTimeline, c: ProClip): Pair<ProClip?, ProClip?> {
+    val frame = TimelineMath.tickOfFrame(1, p.rateNum, p.rateDen)
+    val same = p.clips.filter { it.track == c.track && it.id != c.id }
+    val prev = same.firstOrNull { abs(it.start + it.duration - c.start) < frame }
+    val next = same.firstOrNull { abs(it.start - (c.start + c.duration)) < frame }
+    return prev to next
+}
+
+/** Footage time of timeline time [t] in clip [c]. */
+private fun mediaAt(c: ProClip, t: Long): Long = c.sourceIn + ((t - c.start) * c.speed).roundToLong()
+
+/**
+ * How far a drag of [dx] px moves [d]'s edit, frame-exact, kept inside the footage and the
+ * neighbours the engine would stop at, and (with Snap on) stuck to the nearest edit, the
+ * playhead, In/Out or a marker within [reach] px.
+ */
+private fun dragDelta(p: ProTimeline, playhead: Long, d: ToolDrag, dx: Float, pps: Float, reach: Float): Long {
+    val frame = TimelineMath.tickOfFrame(1, p.rateNum, p.rateDen)
+    val c = d.clip
+    var delta = TimelineMath.snap(abs((dx / pps * TPS).roundToLong()), p.rateNum, p.rateDen) * (if (dx < 0) -1 else 1)
+    // the edge (or edges) that moves, for snapping
+    val edges: List<Long> = when (d.kind) {
+        DragKind.Trim, DragKind.Ripple, DragKind.Stretch, DragKind.Roll -> listOf(if (d.head) c.start else c.start + c.duration)
+        DragKind.Slide, DragKind.Forward, DragKind.Move -> listOf(c.start, c.start + c.duration)
+        DragKind.Slip -> emptyList()
+    }
+    if (p.snapping && edges.isNotEmpty()) {
+        val moving = (listOf(c) + d.group + listOfNotNull(d.partner)).map { it.id }.toSet()
+        val points = buildList {
+            add(0L)
+            add(playhead)
+            p.markIn?.let(::add)
+            p.markOut?.let(::add)
+            p.markers.forEach { add(it.start) }
+            p.clips.filter { it.id !in moving }.forEach {
+                add(it.start)
+                add(it.start + it.duration)
+            }
+        }
+        val within = reach / pps * TPS
+        var best = Double.MAX_VALUE
+        for (pt in points) for (e in edges) {
+            val dd = abs((pt - (e + delta)).toDouble())
+            if (dd < within && dd < best) {
+                best = dd
+                delta = pt - e
+            }
+        }
+    }
+    val media = c.mediaDuration
+    val (prev, next) = neighbours(p, c)
+    fun headRoom() = if (media > 0) -(c.sourceIn / c.speed).roundToLong() else Long.MIN_VALUE / 4
+    fun tailRoom() = if (media > 0) ((media - c.sourceIn) / c.speed).roundToLong() - c.duration else Long.MAX_VALUE / 4
+    when (d.kind) {
+        DragKind.Trim, DragKind.Ripple, DragKind.Stretch -> {
+            if (d.head) {
+                delta = delta.coerceAtMost(c.duration - frame)
+                if (d.kind != DragKind.Stretch) delta = delta.coerceAtLeast(headRoom())
+                if (d.kind == DragKind.Trim && prev == null) delta = delta.coerceAtLeast(-c.start)
+            } else {
+                delta = delta.coerceAtLeast(frame - c.duration)
+                if (d.kind != DragKind.Stretch) delta = delta.coerceAtMost(tailRoom())
+            }
+        }
+        DragKind.Roll -> {
+            val o = d.partner
+            if (o != null) {
+                val (l, r) = if (d.head) o to c else c to o
+                delta = delta.coerceAtLeast(frame - l.duration).coerceAtMost(r.duration - frame)
+            }
+        }
+        DragKind.Slip -> if (media > 0) delta = -((-delta).coerceAtLeast(headRoom()).coerceAtMost(tailRoom()))
+        DragKind.Slide -> {
+            prev?.let { delta = delta.coerceAtLeast(frame - it.duration) }
+            next?.let { delta = delta.coerceAtMost(it.duration - frame) }
+        }
+        DragKind.Forward, DragKind.Move -> delta = delta.coerceAtLeast(-(d.group.minOfOrNull { it.start } ?: c.start))
+    }
+    return delta
+}
+
+/** Where each clip a drag changes would sit: (start, duration) by clip id. */
+private fun dragGhosts(p: ProTimeline, d: ToolDrag, delta: Long): Map<ULong, Pair<Long, Long>> {
+    val c = d.clip
+    val out = HashMap<ULong, Pair<Long, Long>>()
+    fun head(x: ProClip, k: Long) = (x.start + k) to (x.duration - k)
+    fun tail(x: ProClip, k: Long) = x.start to (x.duration + k)
+    when (d.kind) {
+        DragKind.Trim, DragKind.Stretch -> out[c.id] = if (d.head) head(c, delta) else tail(c, delta)
+        DragKind.Ripple -> {
+            out[c.id] = if (d.head) c.start to (c.duration - delta) else tail(c, delta)
+            val shift = if (d.head) -delta else delta
+            for (o in p.clips.filter { it.track == c.track && it.start >= c.start + c.duration }) out[o.id] = (o.start + shift) to o.duration
+        }
+        DragKind.Roll -> {
+            val o = d.partner
+            if (o == null) {
+                out[c.id] = if (d.head) head(c, delta) else tail(c, delta)
+            } else if (d.head) {
+                out[o.id] = tail(o, delta)
+                out[c.id] = head(c, delta)
+            } else {
+                out[c.id] = tail(c, delta)
+                out[o.id] = head(o, delta)
+            }
+        }
+        DragKind.Slide -> {
+            val (prev, next) = neighbours(p, c)
+            out[c.id] = (c.start + delta) to c.duration
+            prev?.let { out[it.id] = tail(it, delta) }
+            next?.let { out[it.id] = head(it, delta) }
+        }
+        DragKind.Forward -> for (o in d.group) out[o.id] = (o.start + delta) to o.duration
+        DragKind.Slip, DragKind.Move -> {}
+    }
+    return out
+}
+
+/** The Program monitor's frames for a drag: the edit's frame, or two side by side (roll, slip, slide). */
+private fun dragView(p: ProTimeline, d: ToolDrag, delta: Long): TrimView? {
+    val frame = TimelineMath.tickOfFrame(1, p.rateNum, p.rateDen)
+    val c = d.clip
+    fun pic(x: ProClip, mediaTime: Long, label: String): TrimFrame {
+        val t = if (x.mediaDuration > 0) mediaTime.coerceIn(0L, max(0L, x.mediaDuration - frame)) else mediaTime.coerceAtLeast(0L)
+        return TrimFrame(if (x.kind == ClipKind.AUDIO) null else x.item, t, label)
+    }
+    val tc = { t: Long -> TimelineMath.timecode(t, p.rateNum, p.rateDen) }
+    val sign = if (delta >= 0) "+" else "-"
+    val by = "$sign${tc(abs(delta))}"
+    return when (d.kind) {
+        DragKind.Trim, DragKind.Ripple, DragKind.Stretch -> {
+            val f = if (d.head) pic(c, c.sourceIn + (delta * c.speed).roundToLong(), "In") else pic(c, c.sourceIn + ((c.duration + delta - frame) * c.speed).roundToLong(), "Out")
+            TrimView(listOf(f), "${if (d.kind == DragKind.Ripple) "Ripple" else if (d.kind == DragKind.Stretch) "Rate Stretch" else "Trim"} $by")
+        }
+        DragKind.Roll -> {
+            val o = d.partner ?: return TrimView(listOf(pic(c, mediaAt(c, if (d.head) c.start + delta else c.start + c.duration + delta - frame), if (d.head) "In" else "Out")), "Trim $by")
+            val (l, r) = if (d.head) o to c else c to o
+            val cut = r.start + delta
+            TrimView(listOf(pic(l, mediaAt(l, cut - frame), "Out"), pic(r, mediaAt(r, cut), "In")), "Rolling Edit $by")
+        }
+        DragKind.Slip -> {
+            val inT = c.sourceIn - (delta * c.speed).roundToLong()
+            TrimView(listOf(pic(c, inT, "In"), pic(c, inT + ((c.duration - frame) * c.speed).roundToLong(), "Out")), "Slip $by")
+        }
+        DragKind.Slide -> {
+            val (prev, next) = neighbours(p, c)
+            val left = prev?.let { pic(it, mediaAt(it, c.start + delta - frame), "Out") } ?: TrimFrame(null, 0, "Out")
+            val right = next?.let { pic(it, mediaAt(it, c.start + c.duration + delta), "In") } ?: TrimFrame(null, 0, "In")
+            TrimView(listOf(left, right), "Slide $by")
+        }
+        DragKind.Forward, DragKind.Move -> null
+    }
+}
+
+/** The tracks' clips, the In/Out band and the playhead; and what each tool does on them. */
 @Composable
 private fun Tracks(
     ed: EditorController,
@@ -702,22 +864,89 @@ private fun Tracks(
     val measurer = rememberTextMeasurer()
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
-    // a clip being dragged: by how much, and to where (y in the track stack)
-    var dragClip by remember { mutableStateOf<ProClip?>(null) }
+    // a drag in progress: what it does, by how much, and to where (y in the track stack)
+    var drag by remember { mutableStateOf<ToolDrag?>(null) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragY by remember { mutableFloatStateOf(0f) }
     // the gesture reads these as they are now, not as they were when it began
     val pNow by rememberUpdatedState(p)
     val rowsNow by rememberUpdatedState(rows)
     val tAt by rememberUpdatedState(tOf)
+    val xAt by rememberUpdatedState(xOf)
     val ppsNow by rememberUpdatedState(pps)
     val vNow by rememberUpdatedState(vScroll)
     val pan by rememberUpdatedState(onPan)
     val zoom by rememberUpdatedState(onZoom)
     val menuAt by rememberUpdatedState(onMenu)
     val snapReach = with(density) { 10.dp.toPx() }
+    val edgeZone = with(density) { 18.dp.toPx() }
 
     fun rowAt(rows: List<ProRow>, y: Float) = rows.firstOrNull { y >= it.top && y < it.bottom }
+    fun frameAt(x: Float): Long = TimelineMath.snap(tAt(x), pNow.rateNum, pNow.rateDen)
+
+    /** What a drag beginning at [x] on [c] does with the current tool (null: the view pans). */
+    fun startDrag(p: ProTimeline, c: ProClip, row: ProRow, x: Float): ToolDrag? {
+        if (row.track.locked) return null
+        val x0 = xAt(c.start)
+        val x1 = xAt(c.start + c.duration)
+        val zone = minOf(edgeZone, (x1 - x0) / 3f)
+        val edge: Boolean? = when {
+            x - x0 <= zone -> true
+            x1 - x <= zone -> false
+            else -> null
+        }
+        val (prev, next) = neighbours(p, c)
+        return when (ed.proTool) {
+            ProTool.Selection -> when {
+                !c.selected -> null
+                edge != null -> ToolDrag(DragKind.Trim, c, edge)
+                else -> ToolDrag(DragKind.Move, c, false)
+            }
+            ProTool.RippleEdit -> edge?.let { ToolDrag(DragKind.Ripple, c, it) }
+            ProTool.RollingEdit -> edge?.let { ToolDrag(DragKind.Roll, c, it, partner = if (it) prev else next) }
+            ProTool.RateStretch -> edge?.let { ToolDrag(DragKind.Stretch, c, it) }
+            ProTool.Slip -> ToolDrag(DragKind.Slip, c, false)
+            ProTool.Slide -> ToolDrag(DragKind.Slide, c, false)
+            ProTool.TrackSelectForward -> {
+                val t = tAt(x)
+                ToolDrag(DragKind.Forward, c, false, group = p.clips.filter { it.track == c.track && it.start + it.duration > t })
+            }
+            ProTool.Hand, ProTool.Zoom, ProTool.Razor, ProTool.Type -> null
+        }
+    }
+
+    /** Make a finished drag one edit. */
+    fun commit(p: ProTimeline, d: ToolDrag, dx: Float, y: Float) {
+        val c = d.clip
+        if (d.kind == DragKind.Move) {
+            val from = (p.videoTracks + p.audioTracks).firstOrNull { it.id == c.track }
+            val to = rowAt(rowsNow, y)?.track?.takeIf { from != null && it.video == from.video } ?: from
+            val start = landing(p, ed.playhead, c, dx, ppsNow(), snapReach)
+            if (to != null && (start != c.start || to.id != c.track)) ed.proMove(c.id, to.id, start)
+            return
+        }
+        val delta = dragDelta(p, ed.playhead, d, dx, ppsNow(), snapReach)
+        if (delta == 0L) return
+        haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        when (d.kind) {
+            DragKind.Trim -> ed.proTrim(c.id, d.head, delta, ripple = false)
+            DragKind.Ripple -> ed.proTrim(c.id, d.head, delta, ripple = true)
+            DragKind.Roll -> {
+                val o = d.partner
+                when {
+                    o == null -> ed.proTrim(c.id, d.head, delta, ripple = false)
+                    d.head -> ed.proRoll(o.id, c.id, delta)
+                    else -> ed.proRoll(c.id, o.id, delta)
+                }
+            }
+            DragKind.Stretch -> ed.proRateStretch(c.id, d.head, delta)
+            // dragging right shows earlier footage, as on the desktop
+            DragKind.Slip -> ed.proSlip(c.id, -delta)
+            DragKind.Slide -> ed.proSlide(c.id, delta)
+            DragKind.Forward -> ed.proShift(d.group.map { it.id }, delta)
+            DragKind.Move -> {}
+        }
+    }
 
     Canvas(
         modifier
@@ -752,22 +981,36 @@ private fun Tracks(
                         }
                         r
                     }
+                    val x = down.position.x
                     when (result) {
+                        // a long press: the context menu, or the tool's second action
                         null -> {
-                            menuAt(down.position, hit)
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            when (ed.proTool) {
+                                ProTool.Zoom -> zoom(0.5f, x)
+                                ProTool.Razor -> ed.proRazor(frameAt(x), null, null)
+                                ProTool.TrackSelectForward -> ed.proSelectForward(null, tAt(x))
+                                else -> menuAt(down.position, hit)
+                            }
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 ev.changes.forEach { it.consume() }
                                 if (ev.changes.none { it.pressed }) break
                             }
                         }
-                        // a tap selects the clip under it (with its partners), or clears the selection
-                        "up" -> ed.proSelect(hit?.id)
+                        // a tap
+                        "up" -> when (ed.proTool) {
+                            ProTool.Zoom -> zoom(2f, x)
+                            ProTool.Hand -> {}
+                            ProTool.Razor -> if (hit != null && hitRow?.track?.locked != true) ed.proRazor(frameAt(x), hit.id, null)
+                            ProTool.TrackSelectForward -> ed.proSelectForward(hitRow?.track?.id, tAt(x))
+                            ProTool.Type -> ed.titleAt = frameAt(x)
+                            else -> ed.proSelect(hit?.id)
+                        }
                         else -> {
-                            // a selected clip on an unlocked track moves; anywhere else the view pans
-                            val dragging = !multi && hit != null && hit.selected && hitRow?.track?.locked != true
-                            if (dragging) {
-                                dragClip = hit
+                            val d = if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x) else null
+                            if (d != null) {
+                                drag = d
                                 dragDx = 0f
                                 dragY = stackY
                             }
@@ -777,45 +1020,41 @@ private fun Tracks(
                                 if (pressed.isEmpty()) break
                                 if (pressed.size >= 2) {
                                     multi = true
-                                    dragClip = null
+                                    drag = null
+                                    ed.showTrim(null)
                                     val z = ev.calculateZoom()
-                                    val d = ev.calculatePan()
+                                    val dd = ev.calculatePan()
                                     if (z != 1f) zoom(z, ev.calculateCentroid().x)
-                                    pan(d.x, d.y)
-                                } else if (dragClip != null) {
+                                    pan(dd.x, dd.y)
+                                } else if (drag != null) {
                                     val c = pressed.first()
                                     dragDx += c.positionChange().x
                                     dragY = c.position.y + vNow()
+                                    val dr = drag
+                                    if (dr != null) ed.showTrim(dragView(pNow, dr, dragDelta(pNow, ed.playhead, dr, dragDx, ppsNow(), snapReach)))
                                 } else if (!multi) {
-                                    val d = pressed.first().positionChange()
-                                    pan(d.x, d.y)
+                                    val dd = pressed.first().positionChange()
+                                    pan(dd.x, dd.y)
                                 }
                                 ev.changes.forEach { it.consume() }
                             }
-                            val c = dragClip
-                            if (c != null) {
-                                dragClip = null
-                                val pl = pNow
-                                val from = (pl.videoTracks + pl.audioTracks).firstOrNull { it.id == c.track }
-                                val to = rowAt(rowsNow, dragY)?.track?.takeIf { from != null && it.video == from.video } ?: from
-                                val start = landing(pl, ed.playhead, c, dragDx, ppsNow(), snapReach)
-                                if (to != null && (start != c.start || to.id != c.track)) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                    ed.proMove(c.id, to.id, start)
-                                }
-                            }
+                            val dr = drag
+                            drag = null
+                            ed.showTrim(null)
+                            if (dr != null) commit(pNow, dr, dragDx, dragY)
                         }
                     }
                 }
             }
-            .semantics { contentDescription = "Timeline tracks" },
+            .semantics { contentDescription = "Timeline tracks, ${ed.proTool.label} tool" },
     ) {
         val w = size.width
         val v = vScroll()
-        val dragging = dragClip
+        val dr = drag
+        val ghosts = dr?.let { dragGhosts(p, it, dragDelta(p, ed.playhead, it, dragDx, pps(), snapReach)) }.orEmpty()
         val tracks = p.videoTracks + p.audioTracks
-        val dragTarget = dragging?.let { d -> rowAt(rows, dragY)?.takeIf { r -> r.track.video == tracks.firstOrNull { it.id == d.track }?.video } }
-        val dragShift = dragging?.let { landing(p, ed.playhead, it, dragDx, pps(), snapReach) - it.start } ?: 0L
+        val moveTarget = dr?.takeIf { it.kind == DragKind.Move }?.let { d -> rowAt(rows, dragY)?.takeIf { r -> r.track.video == tracks.firstOrNull { it.id == d.clip.track }?.video } }
+        val moveShift = dr?.takeIf { it.kind == DragKind.Move }?.let { landing(p, ed.playhead, it.clip, dragDx, pps(), snapReach) - it.clip.start } ?: 0L
         translate(0f, -v) {
             // lanes
             for (r in rows) {
@@ -826,11 +1065,16 @@ private fun Tracks(
             val labelStyle = TextStyle(fontFamily = Inter, fontSize = 11.sp)
             for (c in p.clips) {
                 val r = rowOf[c.track] ?: continue
-                val moves = dragging != null && (c.id == dragging.id || c.selected)
-                drawClip(c, r, xOf(c.start), xOf(c.start + c.duration), measurer, labelStyle, alpha = if (moves) 0.35f else 1f)
-                if (moves && dragging != null) {
-                    val row = if (c.id == dragging.id) (dragTarget ?: r) else r
-                    drawClip(c, row, xOf(c.start + dragShift), xOf(c.start + dragShift + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
+                val moves = dr != null && dr.kind == DragKind.Move && (c.id == dr.clip.id || c.selected)
+                val ghost = ghosts[c.id]
+                drawClip(c, r, xOf(c.start), xOf(c.start + c.duration), measurer, labelStyle, alpha = if (moves || ghost != null) 0.35f else 1f)
+                if (moves && dr != null) {
+                    val row = if (c.id == dr.clip.id) (moveTarget ?: r) else r
+                    drawClip(c, row, xOf(c.start + moveShift), xOf(c.start + moveShift + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
+                }
+                if (ghost != null) drawClip(c, r, xOf(ghost.first), xOf(ghost.first + ghost.second), measurer, labelStyle, alpha = 0.9f, ghost = true)
+                if (dr != null && dr.kind == DragKind.Slip && c.id == dr.clip.id) {
+                    drawClip(c, r, xOf(c.start), xOf(c.start + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
                 }
             }
             // locked tracks: hatched

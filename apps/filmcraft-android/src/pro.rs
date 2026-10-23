@@ -55,6 +55,9 @@ pub struct ProClip {
     pub start: i64,
     pub duration: i64,
     pub source_in: i64,
+    /// The media's own length (0 for stills, text and blanks, which have none): how far a slip or
+    /// a trim may go.
+    pub media_duration: i64,
     pub speed: f64,
     /// Clip > Enable.
     pub enabled: bool,
@@ -140,6 +143,13 @@ fn track_info(t: &Track, index: usize, targeting: &filmcraft_engine::Targeting) 
     }
 }
 
+fn media_duration(s: &Session, c: &TrackItem) -> i64 {
+    match s.project.item(c.item).map(|i| &i.kind) {
+        Some(ItemKind::Media(m)) if m.info.kind != filmcraft_media::MediaKind::Still => m.info.duration.0,
+        _ => 0,
+    }
+}
+
 fn clips_of(s: &Session, seq: &Sequence) -> Vec<ProClip> {
     let mut out = Vec::new();
     for (kind, tracks) in [(TrackKind::Video, &seq.video_tracks), (TrackKind::Audio, &seq.audio_tracks)] {
@@ -155,6 +165,7 @@ fn clips_of(s: &Session, seq: &Sequence) -> Vec<ProClip> {
                     start: c.start.0,
                     duration: c.duration.0,
                     source_in: c.source_in.0,
+                    media_duration: media_duration(s, c),
                     speed: c.speed.abs(),
                     enabled: c.enabled,
                     link: c.link,
@@ -379,5 +390,90 @@ pub(crate) fn delete_selection(s: &mut Session, ripple: bool) -> Result<(), Mobi
         return Err(MobileError::Command("Select a clip first.".into()));
     }
     ex(s, if ripple { "edit.rippleDelete" } else { "edit.clear" }, json!({}))?;
+    Ok(())
+}
+
+// ---- tools (phase 2): each is one engine trim command, so one undo step ----
+
+/// The Selection tool on an edge (`ripple`: the Ripple Edit tool): trim clip `clip`'s head or
+/// tail by `delta` ticks. Returns the change made (the engine stops at the media's ends and the
+/// neighbours).
+pub(crate) fn trim_edge(s: &mut Session, clip: u64, head: bool, delta: i64, ripple: bool) -> Result<i64, MobileError> {
+    let r = ex(
+        s,
+        "timeline.trim",
+        json!({"clip": clip, "edge": if head { "in" } else { "out" }, "mode": if ripple { "ripple" } else { "regular" }, "delta": delta}),
+    )?;
+    Ok(r["delta"].as_i64().unwrap_or(0))
+}
+
+/// The Rolling Edit tool: move the cut between `left` and `right` by `delta`. Returns the change made.
+pub(crate) fn roll(s: &mut Session, left: u64, right: u64, delta: i64) -> Result<i64, MobileError> {
+    Ok(ex(s, "timeline.roll", json!({"left": left, "right": right, "delta": delta}))?["delta"].as_i64().unwrap_or(0))
+}
+
+/// The Slip tool: move a clip's footage under it by `delta` (its place and length stay).
+pub(crate) fn slip(s: &mut Session, clip: u64, delta: i64) -> Result<(), MobileError> {
+    ex(s, "timeline.slip", json!({"clip": clip, "delta": delta}))?;
+    Ok(())
+}
+
+/// The Slide tool: move a clip by `delta` between its neighbours, which trim to make room.
+pub(crate) fn slide(s: &mut Session, clip: u64, delta: i64) -> Result<(), MobileError> {
+    ex(s, "timeline.slide", json!({"clip": clip, "delta": delta}))?;
+    Ok(())
+}
+
+/// The Rate Stretch tool: drag a clip's head or tail by `delta`; its speed changes to fit the
+/// same footage. Returns the new speed (1.0 = normal).
+pub(crate) fn rate_stretch(s: &mut Session, clip: u64, head: bool, delta: i64) -> Result<f64, MobileError> {
+    let r = ex(s, "timeline.rateStretch", json!({"clip": clip, "edge": if head { "in" } else { "out" }, "delta": delta}))?;
+    Ok(r["speed"].as_f64().unwrap_or(1.0))
+}
+
+/// The Razor tool: cut clip `clip` (and its linked partners) at `time`, or, with no clip, every
+/// clip on `track` there (every track when that is empty too). Returns how many cuts were made.
+pub(crate) fn razor(s: &mut Session, time: i64, clip: Option<u64>, track: Option<u64>) -> Result<u32, MobileError> {
+    let mut p = json!({"time": time.max(0)});
+    if let Some(c) = clip {
+        p["clip"] = json!(c);
+    } else if let Some(t) = track {
+        p["track"] = json!(t);
+    }
+    let r = ex(s, "timeline.razor", p)?;
+    Ok(u32::try_from(r["cuts"].as_u64().unwrap_or(0)).unwrap_or(u32::MAX))
+}
+
+/// The Track Select Forward tool: select every clip on `track` (every track when empty) that
+/// ends after `time`, as the desktop selects from the click on. Returns how many were selected.
+pub(crate) fn select_forward(s: &mut Session, track: Option<u64>, time: i64) -> Result<u32, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let t = Tick(time.max(0));
+    let clips: Vec<u64> = seq
+        .video_tracks
+        .iter()
+        .chain(&seq.audio_tracks)
+        .filter(|tr| track.is_none_or(|id| tr.id.0 == id))
+        .flat_map(|tr| tr.items.iter().filter(|c| c.end() > t).map(|c| c.id.0))
+        .collect();
+    ex(s, "timeline.select", json!({"clips": clips}))?;
+    Ok(u32::try_from(clips.len()).unwrap_or(u32::MAX))
+}
+
+/// Move clips together by `delta` on their own tracks (the Track Select Forward tool's drag);
+/// linked partners follow while Linked Selection is on. Nothing moves before the start.
+pub(crate) fn shift_clips(s: &mut Session, clips: &[u64], delta: i64) -> Result<(), MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let mut moves = Vec::new();
+    for &c in clips {
+        let f = model::find(seq, ClipId(c)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?;
+        let tracks = if f.kind == TrackKind::Video { &seq.video_tracks } else { &seq.audio_tracks };
+        let track = tracks.get(f.track).map(|t| t.id.0).ok_or_else(|| MobileError::Command("That track is gone.".into()))?;
+        moves.push(json!({"clip": c, "track": track, "time": (f.clip.start.0 + delta).max(0)}));
+    }
+    if moves.is_empty() || delta == 0 {
+        return Ok(());
+    }
+    ex(s, "timeline.move", json!({"moves": moves, "insert": false}))?;
     Ok(())
 }
