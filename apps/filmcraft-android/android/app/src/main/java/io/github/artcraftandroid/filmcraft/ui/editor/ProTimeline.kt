@@ -260,6 +260,17 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 menu = ProMenu(at + Offset(headerPx, tracksTop), if (clip != null) clipMenu(ed, clip) else laneMenu(ed))
                             },
+                            onAddMedia = { at, track, t ->
+                                val where = "${track.code} at ${TimelineMath.timecode(t, num, den)}"
+                                menu = ProMenu(
+                                    at + Offset(headerPx, tracksTop),
+                                    listOf(
+                                        "Add Photos & Videos ($where)" to { ed.addMediaAt(PickKind.PhotosAndVideos, track, t) },
+                                        "Add from Files ($where)" to { ed.addMediaAt(PickKind.FilesVisual, track, t) },
+                                        "Add Sounds ($where)" to { ed.addMediaAt(PickKind.FilesAudio, track, t) },
+                                    ),
+                                )
+                            },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                     }
@@ -312,7 +323,10 @@ private fun TimelineBar(ed: EditorController, p: ProTimeline?, onMenu: (List<Pai
     ) {
         Text(
             TimelineMath.timecode(ed.playhead, ed.rateNum, ed.rateDen),
-            style = TextStyle(fontFamily = Inter, fontSize = 18.sp, color = Fc.AccentLight),
+            // tabular digits: the timecode keeps its width as it counts, so the buttons beside it stay put
+            style = TextStyle(fontFamily = Inter, fontSize = 18.sp, color = Fc.AccentLight, fontFeatureSettings = "tnum"),
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.padding(end = 12.dp).testTag("pro_timecode"),
         )
         Text("${ed.proTool.label} (${ed.proTool.key})", style = FcType.Caption, color = Fc.Secondary, modifier = Modifier.padding(end = 8.dp).testTag("pro_tool_name"))
@@ -426,7 +440,7 @@ private fun Ruler(
         val step = TimelineMath.rulerStep(pps, 96.dp.toPx(), num, den)
         val first = (ed.proScroll / step.ticks) * step.ticks
         var t = first
-        val style = TextStyle(fontFamily = Inter, fontSize = 10.sp, color = Fc.RulerLabel)
+        val style = TextStyle(fontFamily = Inter, fontSize = 10.sp, color = Fc.RulerLabel, fontFeatureSettings = "tnum")
         while (true) {
             val x = xOf(t)
             if (x > size.width) break
@@ -859,11 +873,15 @@ private fun Tracks(
     onPan: (Float, Float) -> Unit,
     onZoom: (Float, Float) -> Unit,
     onMenu: (Offset, ProClip?) -> Unit,
+    onAddMedia: (Offset, ProTrack, Long) -> Unit,
     modifier: Modifier,
 ) {
     val measurer = rememberTextMeasurer()
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
+    val addMediaAt by rememberUpdatedState(onAddMedia)
+    // the last tap (time, place), for a double tap
+    var lastTap by remember { mutableStateOf<Pair<Long, Offset>?>(null) }
     // a drag in progress: what it does, by how much, and to where (y in the track stack)
     var drag by remember { mutableStateOf<ToolDrag?>(null) }
     var dragDx by remember { mutableFloatStateOf(0f) }
@@ -999,13 +1017,26 @@ private fun Tracks(
                             }
                         }
                         // a tap
-                        "up" -> when (ed.proTool) {
+                        // a second tap close by and soon after: add media there (the tools that act on a
+                        // tap keep their single taps)
+                        "up" -> if (
+                            ed.proTool !in listOf(ProTool.Zoom, ProTool.Razor, ProTool.Type) &&
+                            hitRow != null &&
+                            lastTap?.let { (t, at) -> down.uptimeMillis - t < viewConfiguration.doubleTapTimeoutMillis && (at - down.position).getDistance() < 40.dp.toPx() } == true
+                        ) {
+                            lastTap = null
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            addMediaAt(down.position, hitRow.track, frameAt(x))
+                        } else {
+                            lastTap = down.uptimeMillis to down.position
+                            when (ed.proTool) {
                             ProTool.Zoom -> zoom(2f, x)
                             ProTool.Hand -> {}
                             ProTool.Razor -> if (hit != null && hitRow?.track?.locked != true) ed.proRazor(frameAt(x), hit.id, null)
                             ProTool.TrackSelectForward -> ed.proSelectForward(hitRow?.track?.id, tAt(x))
                             ProTool.Type -> ed.titleAt = frameAt(x)
                             else -> ed.proSelect(hit?.id)
+                            }
                         }
                         else -> {
                             val d = if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x) else null

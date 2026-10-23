@@ -868,6 +868,11 @@ impl MobileSession {
         pro::remove_effect(&mut self.lock(), clip, effect)
     }
 
+    /// Import files and put them at `time` on `track` (the double-tapped spot), overwriting.
+    pub fn place_media(&self, paths: Vec<String>, track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
+        self.main_edit(|s| pro::place_media(s, &paths, track, time))
+    }
+
     // ---- export ----
 
     pub fn export_plan(&self, settings: ExportSettings) -> Result<ExportPlan, MobileError> {

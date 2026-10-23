@@ -283,7 +283,7 @@ private fun HotNumber(ed: EditorController, e: EffectInfo, p: ParamInfo, part: I
     }
     Text(
         fmt(shown, p.decimals.toInt()) + (if (p.kind == ParamType.NUMBER && p.unit.isNotEmpty()) " ${p.unit}" else if (p.kind == ParamType.ANGLE) "°" else ""),
-        style = TextStyle(fontFamily = Inter, fontSize = 14.sp, color = Fc.AccentLight),
+        style = TextStyle(fontFamily = Inter, fontSize = 14.sp, color = Fc.AccentLight, fontFeatureSettings = "tnum"),
         maxLines = 1,
         modifier = Modifier
             .heightIn(min = 44.dp)
