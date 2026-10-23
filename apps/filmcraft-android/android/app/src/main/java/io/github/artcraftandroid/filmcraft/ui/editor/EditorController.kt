@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -12,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import io.github.artcraftandroid.filmcraft.core.BinItem
 import io.github.artcraftandroid.filmcraft.core.CaptionInfo
 import io.github.artcraftandroid.filmcraft.core.CaptionLook
 import io.github.artcraftandroid.filmcraft.core.CaptionStatus
@@ -24,6 +26,7 @@ import io.github.artcraftandroid.filmcraft.core.ProTimeline
 import io.github.artcraftandroid.filmcraft.core.TrackSwitches
 import io.github.artcraftandroid.filmcraft.core.Renderer
 import io.github.artcraftandroid.filmcraft.core.SessionStatus
+import io.github.artcraftandroid.filmcraft.core.SourceInfo
 import io.github.artcraftandroid.filmcraft.core.SpeechAudio
 import io.github.artcraftandroid.filmcraft.core.SpeechSettings
 import io.github.artcraftandroid.filmcraft.core.TextStyle
@@ -35,6 +38,7 @@ import io.github.artcraftandroid.filmcraft.engine.Projects
 import io.github.artcraftandroid.filmcraft.engine.intoBitmap
 import io.github.artcraftandroid.filmcraft.engine.toBitmap
 import io.github.artcraftandroid.filmcraft.engine.userMessage
+import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -193,6 +197,7 @@ class EditorController(
     init {
         scope.launch { renderFrames() }
         scope.launch { renderTrims() }
+        scope.launch { renderSource() }
     }
 
     // ---- reading ----
@@ -275,6 +280,9 @@ class EditorController(
 
     private suspend fun refreshPro() {
         pro = runCatching { engine.command { proTimeline() } }.getOrNull()
+        bin = runCatching { engine.command { projectBin() } }.getOrDefault(emptyList())
+        source = runCatching { engine.command { sourceInfo() } }.getOrNull()
+        if (source == null) sourcePicture = null
     }
 
     private fun scheduleSave() {
@@ -461,7 +469,9 @@ class EditorController(
     private suspend fun renderFrames() {
         frameRequests.filterNotNull().collect { req ->
             val r = renderer ?: return@collect
-            val side = if (req.draft && playing) (previewSide * 3 / 4).coerceAtLeast(160) else previewSide
+            // Pro mode's playback resolution draws the program smaller (faster) while it plays and scrubs
+            val full = if (proMode && req.draft) (previewSide * playbackScale).toInt().coerceAtLeast(120) else previewSide
+            val side = if (req.draft && playing) (full * 3 / 4).coerceAtLeast(120) else full
             val frame = withContext(engine.preview) { runCatching { r.frame(req.time, side.toUInt(), req.draft, null) }.getOrNull() } ?: return@collect
             val bmp = frame.intoBitmap(bitmaps[nextBitmap]) ?: return@collect
             bitmaps[nextBitmap] = bmp
@@ -937,6 +947,164 @@ class EditorController(
         if (reverseJob != null) shuttleStop()
         if (!playing) play()
     }
+
+    // ---- Pro mode: the Project panel and the Source monitor ----
+
+    /** Pro mode's tabs: the phone-upright layout's (Timeline, Source, Effects, Project) and the side panel's (Effect Controls, Project). */
+    var proTab by mutableIntStateOf(0)
+    var proSideTab by mutableIntStateOf(0)
+    /** Pro mode is showing the desktop layout (the Source monitor always in sight). */
+    var proDesktop = false
+
+    /** Open [item] in the Source monitor and Insert or Overwrite all of it at the playhead. */
+    fun openSourceAndEdit(item: ULong, overwrite: Boolean) {
+        stopSource()
+        scope.launch {
+            val s = runCatching { engine.command { openSource(item) } }.onFailure { host.tell(it.userMessage) }.getOrNull() ?: return@launch
+            source = s
+            requestSourceFrame(s.playhead)
+            sourceEdit(overwrite)
+        }
+    }
+
+    /** The Project panel's items. */
+    var bin by mutableStateOf<List<BinItem>>(emptyList())
+        private set
+    /** The clip in the Source monitor, and its picture at the source playhead. */
+    var source by mutableStateOf<SourceInfo?>(null)
+        private set
+    var sourcePicture by mutableStateOf<ImageBitmap?>(null)
+        private set
+    var sourcePlaying by mutableStateOf(false)
+        private set
+    private var sourceJob: Job? = null
+    private val sourceRequests = MutableStateFlow<Long?>(null)
+    /** The Program monitor's playback resolution (1, 1/2, 1/4) and its safe margins. */
+    var playbackScale by mutableFloatStateOf(1f)
+    var safeMargins by mutableStateOf(false)
+
+    /** Import files into the Project panel without putting them on the timeline. */
+    fun importToBin(kind: PickKind) {
+        host.pick(kind) { uris ->
+            if (uris.isEmpty()) return@pick
+            scope.launch {
+                busy = "Importing…"
+                try {
+                    val paths = withContext(Dispatchers.IO) { uris.mapNotNull { u -> runCatching { projects.importUri(project, u).absolutePath }.getOrNull() } }
+                    if (paths.isEmpty()) host.tell("That file can't be imported.") else engine.command { `import`(paths) }
+                } catch (e: Exception) {
+                    host.tell(e.userMessage)
+                } finally {
+                    busy = null
+                }
+                refresh()
+            }
+        }
+    }
+
+    fun openSource(item: ULong) {
+        stopSource()
+        scope.launch {
+            val s = runCatching { engine.command { openSource(item) } }.onFailure { host.tell(it.userMessage) }.getOrNull() ?: return@launch
+            source = s
+            requestSourceFrame(s.playhead)
+        }
+    }
+
+    fun closeSource() {
+        stopSource()
+        scope.launch {
+            runCatching { engine.command { closeSource() } }
+            source = null
+            sourcePicture = null
+        }
+    }
+
+    /** Scrub the Source monitor. */
+    fun seekSource(t: Long) {
+        val s = source ?: return
+        val c = t.coerceIn(s.start, max(s.start, s.end - TimelineMath.tickOfFrame(1, s.rateNum, s.rateDen)))
+        source = s.copy(playhead = c)
+        requestSourceFrame(c)
+        scope.launch { runCatching { engine.command { setSourcePlayhead(c) } } }
+    }
+
+    fun stepSource(frames: Int) {
+        val s = source ?: return
+        val f = TimelineMath.frames(s.playhead, s.rateNum, s.rateDen) + frames
+        seekSource(TimelineMath.tickOfFrame(f.coerceAtLeast(0), s.rateNum, s.rateDen))
+    }
+
+    /** Play the source clip (picture only) from its playhead to its Out (or end). */
+    fun toggleSourcePlay() {
+        if (sourcePlaying) return stopSource()
+        val s = source ?: return
+        stop()
+        val end = (s.markOut?.let { it + TimelineMath.tickOfFrame(1, s.rateNum, s.rateDen) } ?: s.end).coerceAtMost(s.end)
+        val from = if (s.playhead >= end - TimelineMath.tickOfFrame(1, s.rateNum, s.rateDen)) (s.markIn ?: s.start) else s.playhead
+        sourcePlaying = true
+        sourceJob = scope.launch(androidx.compose.ui.platform.AndroidUiDispatcher.Main) {
+            var last = withFrameNanos { it }
+            var t = from
+            while (isActive && t < end) {
+                val now = withFrameNanos { it }
+                t = (t + (now - last) / 1_000L * TPS / 1_000_000L).coerceAtMost(end)
+                last = now
+                source = source?.copy(playhead = t)
+                requestSourceFrame(t)
+            }
+            sourcePlaying = false
+            sourceJob = null
+            val at = source?.playhead ?: return@launch
+            seekSource(at)
+        }
+    }
+
+    fun stopSource() {
+        sourceJob?.cancel()
+        sourceJob = null
+        if (sourcePlaying) {
+            sourcePlaying = false
+            source?.let { seekSource(it.playhead) }
+        }
+    }
+
+    private fun requestSourceFrame(t: Long) {
+        sourceRequests.value = t
+    }
+
+    private suspend fun renderSource() {
+        sourceRequests.filterNotNull().collectLatest { t ->
+            val s = source ?: return@collectLatest
+            val r = renderer ?: return@collectLatest
+            if (!s.hasVideo) {
+                sourcePicture = null
+                return@collectLatest
+            }
+            val side = (previewSide * 2 / 3).coerceIn(160, 960).toUInt()
+            val pic = withContext(engine.preview) { runCatching { r.thumbnail(s.item, t, side, null).toBitmap()?.asImageBitmap() }.getOrNull() }
+            if (pic != null && source?.item == s.item) sourcePicture = pic
+        }
+    }
+
+    fun sourceMarkIn() = source?.let { s -> edit { setSourceMark(true, s.playhead) } }
+    fun sourceMarkOut() = source?.let { s -> edit { setSourceMark(false, s.playhead) } }
+    fun sourceClearInOut() = source?.let {
+        edit {
+            setSourceMark(true, null)
+            setSourceMark(false, null)
+        }
+    }
+
+    /** Insert (,) or Overwrite (.) the source In to Out into the sequence on the patched tracks. */
+    fun sourceEdit(overwrite: Boolean) {
+        if (source == null) return host.tell("Open a clip from the Project panel in the Source monitor first.")
+        stopSource()
+        edit { sourceEdit(overwrite) }
+    }
+
+    /** Lift (;) or Extract (') the sequence In to Out. */
+    fun liftExtract(extract: Boolean) = edit { liftExtract(extract) }
 
     // ---- export ----
 

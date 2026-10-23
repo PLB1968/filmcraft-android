@@ -2,10 +2,24 @@ package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.asImageBitmap
+import io.github.artcraftandroid.filmcraft.core.BinKind
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
@@ -116,6 +130,7 @@ fun ProEditor(ed: EditorController) {
             .testTag("screen_pro_editor"),
     ) {
         val desktop = maxWidth >= 600.dp || maxWidth > maxHeight
+        SideEffect { ed.proDesktop = desktop }
         if (desktop) DesktopLayout(ed) else PortraitLayout(ed)
         ed.titleAt?.let { at -> TitleDialog(ed, at) }
         ed.busy?.let { text ->
@@ -197,7 +212,7 @@ private fun DesktopLayout(ed: EditorController) {
             Row(Modifier.fillMaxSize()) {
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     Row(Modifier.fillMaxWidth().height(monitors)) {
-                        SourceMonitor(Modifier.weight(1f).fillMaxHeight())
+                        SourceMonitor(ed, Modifier.weight(1f).fillMaxHeight())
                         Spacer(Modifier.width(2.dp).fillMaxHeight().background(Fc.Hairline))
                         ProgramMonitor(ed, Modifier.weight(1f).fillMaxHeight())
                     }
@@ -214,7 +229,11 @@ private fun DesktopLayout(ed: EditorController) {
                     val now = if (ed.proSideWidth > 0f) ed.proSideWidth else with(density) { side.toPx() }
                     ed.proSideWidth = (now - d).coerceIn(with(density) { 200.dp.toPx() }, with(density) { max(200f, w.value * 0.5f).dp.toPx() })
                 }
-                EffectControls(ed, Modifier.width(side).fillMaxHeight())
+                Column(Modifier.width(side).fillMaxHeight()) {
+                    PanelTabs(listOf("Effect Controls", "Project"), ed.proSideTab) { ed.proSideTab = it }
+                    if (ed.proSideTab == 0) EffectControls(ed, Modifier.fillMaxWidth().weight(1f))
+                    else ProjectPanel(ed, Modifier.fillMaxWidth().weight(1f))
+                }
             }
         }
     }
@@ -222,37 +241,21 @@ private fun DesktopLayout(ed: EditorController) {
 
 @Composable
 private fun PortraitLayout(ed: EditorController) {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         ProTopBar(ed)
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
             val monitor = maxHeight * 0.38f
             Column(Modifier.fillMaxSize()) {
                 ProgramMonitor(ed, Modifier.fillMaxWidth().height(monitor))
-                Row(Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel)) {
-                    for ((i, label) in listOf("Timeline", "Source", "Effect Controls").withIndex()) {
-                        val on = tab == i
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable(role = Role.Tab) { tab = i }
-                                .testTag("pro_tab_${label.lowercase().replace(' ', '_')}")
-                                .semantics { selected = on },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(label, style = FcType.Caption, color = if (on) Fc.Title else Fc.Detail)
-                            if (on) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.6f).height(2.dp).background(Fc.AccentLight))
-                        }
-                    }
-                }
-                when (tab) {
+                PanelTabs(listOf("Timeline", "Source", "Effects", "Project"), ed.proTab) { ed.proTab = it }
+                when (ed.proTab) {
                     0 -> {
                         ProToolBar(ed, vertical = false)
                         ProTimelinePanel(ed, compact = true, modifier = Modifier.fillMaxWidth().weight(1f))
                     }
-                    1 -> SourceMonitor(Modifier.fillMaxWidth().weight(1f))
-                    else -> EffectControls(ed, Modifier.fillMaxWidth().weight(1f))
+                    1 -> SourceMonitor(ed, Modifier.fillMaxWidth().weight(1f))
+                    2 -> EffectControls(ed, Modifier.fillMaxWidth().weight(1f))
+                    else -> ProjectPanel(ed, Modifier.fillMaxWidth().weight(1f))
                 }
             }
         }
@@ -328,6 +331,22 @@ private fun ProTransport(ed: EditorController) {
         TransportButton(ProGlyphs.Marker, "Add Marker", "pro_program_add_marker", has) { ed.addMarker() }
         TransportButton(LucideIcons.ChevronLeft.glyph(), "Go to Previous Marker", "pro_program_prev_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = false) }
         TransportButton(LucideIcons.ChevronRight.glyph(), "Go to Next Marker", "pro_program_next_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = true) }
+        val inOut = ed.pro?.markIn != null || ed.pro?.markOut != null
+        TextButton44("Lift", "pro_program_lift", inOut) { ed.liftExtract(extract = false) }
+        TextButton44("Extract", "pro_program_extract", inOut) { ed.liftExtract(extract = true) }
+        TextButton44(if (ed.safeMargins) "Safe Margins ✓" else "Safe Margins", "pro_program_safe_margins", true) { ed.safeMargins = !ed.safeMargins }
+        val res = when {
+            ed.playbackScale >= 1f -> "Full"
+            ed.playbackScale >= 0.5f -> "1/2"
+            else -> "1/4"
+        }
+        TextButton44("Resolution: $res", "pro_program_resolution", true) {
+            ed.playbackScale = when {
+                ed.playbackScale >= 1f -> 0.5f
+                ed.playbackScale >= 0.5f -> 0.25f
+                else -> 1f
+            }
+        }
     }
 }
 
@@ -336,13 +355,216 @@ private fun TransportButton(glyph: Glyph, description: String, tag: String, enab
     FcIconButton(glyph, description, onClick, enabled = enabled, size = 44.dp, iconSize = 22.dp, modifier = Modifier.testTag(tag))
 }
 
-/** The Source monitor: the clip opened from the Project panel (three-point editing comes with it). */
+/** A row of panel tabs (44 dp high). */
 @Composable
-private fun SourceMonitor(modifier: Modifier) {
+private fun PanelTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel)) {
+        for ((i, label) in labels.withIndex()) {
+            val on = selected == i
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable(role = Role.Tab) { onSelect(i) }
+                    .testTag("pro_tab_${label.lowercase().replace(' ', '_')}")
+                    .semantics { this.selected = on },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, style = FcType.Caption, color = if (on) Fc.Title else Fc.Detail, maxLines = 1)
+                if (on) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.6f).height(2.dp).background(Fc.AccentLight))
+            }
+        }
+    }
+}
+
+/**
+ * The Source monitor: the clip opened from the Project panel. Scrub it, mark its In and Out, then
+ * Insert (,) or Overwrite (.) it into the sequence on the patched tracks.
+ */
+@Composable
+private fun SourceMonitor(ed: EditorController, modifier: Modifier) {
+    val src = ed.source
     Column(modifier.background(Fc.Black).testTag("pro_source_monitor")) {
-        PanelTitle("Source")
-        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-            Text("No clip open", style = FcType.BodySmall, color = Fc.Detail, textAlign = TextAlign.Center)
+        PanelTitle(if (src != null) "Source: ${src.name}" else "Source", src?.let { TimelineMath.timecode(it.playhead - it.start, it.rateNum, it.rateDen) } ?: "")
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clickable(enabled = src != null, onClickLabel = "Play or stop the source") { ed.toggleSourcePlay() },
+            contentAlignment = Alignment.Center,
+        ) {
+            val pic = ed.sourcePicture
+            when {
+                src == null -> Text("Open a clip from the Project panel", style = FcType.BodySmall, color = Fc.Detail, textAlign = TextAlign.Center)
+                !src.hasVideo -> Text("Sound only", style = FcType.BodySmall, color = Fc.Detail)
+                pic != null -> Image(pic, contentDescription = src.name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            }
+        }
+        if (src != null) SourceScrubber(ed, src)
+        Row(
+            Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val has = src != null
+            TransportButton(ProGlyphs.MarkIn, "Mark In", "pro_source_mark_in", has) { ed.sourceMarkIn() }
+            TransportButton(ProGlyphs.MarkOut, "Mark Out", "pro_source_mark_out", has) { ed.sourceMarkOut() }
+            TransportButton(Glyphs.StepBack, "Step Back 1 Frame", "pro_source_step_back", has) { ed.stepSource(-1) }
+            TransportButton(if (ed.sourcePlaying) Glyphs.Pause else Glyphs.Play, if (ed.sourcePlaying) "Stop" else "Play", "pro_source_play", has) { ed.toggleSourcePlay() }
+            TransportButton(Glyphs.StepForward, "Step Forward 1 Frame", "pro_source_step_forward", has) { ed.stepSource(1) }
+            TextButton44("Insert", "pro_source_insert", has) { ed.sourceEdit(overwrite = false) }
+            TextButton44("Overwrite", "pro_source_overwrite", has) { ed.sourceEdit(overwrite = true) }
+            TextButton44("Clear In/Out", "pro_source_clear_in_out", src?.markIn != null || src?.markOut != null) { ed.sourceClearInOut() }
+            TransportButton(LucideIcons.X.glyph(), "Close Source", "pro_source_close", has) { ed.closeSource() }
+        }
+    }
+}
+
+/** The Source monitor's time bar: its In to Out, and the playhead; tap or drag to scrub. */
+@Composable
+private fun SourceScrubber(ed: EditorController, src: io.github.artcraftandroid.filmcraft.core.SourceInfo) {
+    val span = max(1L, src.end - src.start)
+    val seek by rememberUpdatedState({ x: Float, w: Float -> ed.seekSource(src.start + (x / w * span).toLong()) })
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .background(Fc.Panel)
+            .pointerInput(Unit) {
+                detectTapGestures { seek(it.x, size.width.toFloat()) }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures { change, _ ->
+                    change.consume()
+                    seek(change.position.x, size.width.toFloat())
+                }
+            }
+            .semantics { contentDescription = "Source time bar" },
+    ) {
+        val w = size.width
+        fun x(t: Long) = ((t - src.start).toFloat() / span * w).coerceIn(0f, w)
+        drawRect(Fc.Raised, Offset(0f, size.height / 2 - 2.dp.toPx()), Size(w, 4.dp.toPx()))
+        val i = src.markIn
+        val o = src.markOut
+        if (i != null || o != null) {
+            val x0 = i?.let(::x) ?: 0f
+            val x1 = o?.let(::x) ?: w
+            drawRect(Fc.Accent, Offset(x0, size.height / 2 - 4.dp.toPx()), Size(max(2f, x1 - x0), 8.dp.toPx()))
+        }
+        val px = x(src.playhead)
+        drawLine(Fc.AccentLight, Offset(px, 2.dp.toPx()), Offset(px, size.height - 2.dp.toPx()), 2.dp.toPx())
+    }
+}
+
+@Composable
+private fun TextButton44(label: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp)
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = FcType.Caption, color = if (enabled) Fc.Title else Fc.Disabled, maxLines = 1)
+    }
+}
+
+/** The Project panel: the media imported into the project, with thumbnails; tap one to open it in the Source monitor. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
+    var importing by remember { mutableStateOf(false) }
+    var menuFor by remember { mutableStateOf<io.github.artcraftandroid.filmcraft.core.BinItem?>(null) }
+    @Suppress("UNUSED_VARIABLE") val version = ed.media.version
+    Column(modifier.background(Fc.Layer1).testTag("pro_project_panel")) {
+        Row(Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Project: ${ed.project.name}", style = FcType.Caption, color = Fc.Title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Box {
+                TextButton44("Import", "pro_project_import", true) { importing = true }
+                DropdownMenu(expanded = importing, onDismissRequest = { importing = false }, containerColor = Fc.Panel) {
+                    for ((label, kind) in listOf("Photos and videos" to PickKind.PhotosAndVideos, "Files" to PickKind.FilesVisual, "Sounds" to PickKind.FilesAudio)) {
+                        DropdownMenuItem(text = { Text(label, style = FcType.Body, color = Fc.Body) }, onClick = {
+                            importing = false
+                            ed.importToBin(kind)
+                        })
+                    }
+                }
+            }
+        }
+        val items = ed.bin
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                Text("Import media to see it here", style = FcType.BodySmall, color = Fc.Detail)
+            }
+            return@Column
+        }
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(items, key = { it.id.toLong() }) { b ->
+                val open = ed.source?.item == b.id
+                Box {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .background(if (open) Fc.Raised else Color.Transparent)
+                            .combinedClickable(
+                                onClick = {
+                                    ed.openSource(b.id)
+                                    if (!ed.proDesktop) ed.proTab = 1
+                                },
+                                onLongClick = { menuFor = b },
+                            )
+                            .padding(horizontal = 8.dp)
+                            .testTag("pro_bin_item_${b.id}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(width = 72.dp, height = 40.dp).clip(RoundedCornerShape(4.dp)).background(Fc.ThumbPlaceholder), contentAlignment = Alignment.Center) {
+                            val thumb = when (b.kind) {
+                                BinKind.VIDEO -> ed.media.frame(b.path, min(1.0, b.duration.toDouble() / TPS / 2), 80, still = false)
+                                BinKind.IMAGE -> ed.media.frame(b.path, 0.0, 80, still = true)
+                                BinKind.GENERATED -> ed.media.engineFrame(b.id.toLong(), 0, 80)
+                                else -> null
+                            }
+                            if (thumb != null) {
+                                Image(thumb.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            } else if (b.kind == BinKind.AUDIO) {
+                                GlyphIcon(LucideIcons.Music.glyph(), Fc.Secondary, size = 20.dp)
+                            } else if (b.kind == BinKind.MISSING) {
+                                GlyphIcon(LucideIcons.TriangleAlert.glyph(), Fc.Negative, size = 20.dp)
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(b.name, style = FcType.BodySmall, color = Fc.Title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val kind = when (b.kind) {
+                                BinKind.VIDEO -> "Video"
+                                BinKind.AUDIO -> "Audio"
+                                BinKind.IMAGE -> "Still"
+                                BinKind.GENERATED -> "Generated"
+                                BinKind.MISSING -> "Missing"
+                            }
+                            val length = if (b.duration > 0) " · " + TimelineMath.timecode(b.duration, ed.rateNum, ed.rateDen) else ""
+                            val used = if (b.uses > 0u) " · used ${b.uses}×" else ""
+                            Text(kind + length + used, style = FcType.Badge, color = Fc.Detail, maxLines = 1)
+                        }
+                    }
+                    DropdownMenu(expanded = menuFor?.id == b.id, onDismissRequest = { menuFor = null }, containerColor = Fc.Panel) {
+                        DropdownMenuItem(text = { Text("Open in Source Monitor", style = FcType.Body, color = Fc.Body) }, onClick = {
+                            menuFor = null
+                            ed.openSource(b.id)
+                        })
+                        DropdownMenuItem(text = { Text("Insert at Playhead", style = FcType.Body, color = Fc.Body) }, onClick = {
+                            menuFor = null
+                            ed.openSourceAndEdit(b.id, overwrite = false)
+                        })
+                        DropdownMenuItem(text = { Text("Overwrite at Playhead", style = FcType.Body, color = Fc.Body) }, onClick = {
+                            menuFor = null
+                            ed.openSourceAndEdit(b.id, overwrite = true)
+                        })
+                    }
+                }
+            }
         }
     }
 }
@@ -469,6 +691,10 @@ private fun proShortcut(ed: EditorController, e: KeyEvent): Boolean {
         Key.Equals, Key.Plus, Key.NumPadAdd -> ed.proPxPerSecond = (ed.proPxPerSecond * 1.5f).coerceIn(2f, 100_000f)
         Key.Minus, Key.NumPadSubtract -> ed.proPxPerSecond = (ed.proPxPerSecond / 1.5f).coerceIn(2f, 100_000f)
         Key.Backslash -> ed.proPxPerSecond = 0f
+        Key.Comma -> ed.sourceEdit(overwrite = false)
+        Key.Period -> ed.sourceEdit(overwrite = true)
+        Key.Semicolon -> ed.liftExtract(extract = false)
+        Key.Apostrophe -> ed.liftExtract(extract = true)
         else -> return false
     }
     return true

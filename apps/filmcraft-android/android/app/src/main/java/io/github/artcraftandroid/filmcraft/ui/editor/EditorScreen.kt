@@ -380,6 +380,16 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
                     modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
                 )
             }
+            // Pro mode's safe margins: action safe (90 %) and title safe (80 %)
+            if (ed.proMode && ed.safeMargins) {
+                Canvas(Modifier.fillMaxSize()) {
+                    for (k in floatArrayOf(0.9f, 0.8f)) {
+                        val w = size.width * k
+                        val h = size.height * k
+                        drawRect(Color.White.copy(alpha = 0.6f), Offset((size.width - w) / 2, (size.height - h) / 2), androidx.compose.ui.geometry.Size(w, h), style = Stroke(1.dp.toPx()))
+                    }
+                }
+            }
             val pl = placement
             if (movable && pl != null && t != null) {
                 Canvas(Modifier.fillMaxSize()) {
