@@ -85,6 +85,8 @@ pub struct ClipInfo {
     /// The effect's id, empty for none; its intensity 0 to 100.
     pub effect: String,
     pub effect_amount: f64,
+    /// How the picture mixes with what is under it: a [`presets::blends`] id ("normal" for none).
+    pub blend: String,
     /// A recorded voice-over.
     pub voiceover: bool,
     /// Speech made from text (it can be said again differently).
@@ -331,6 +333,7 @@ fn clip_info(s: &Session, seq: &Sequence, f: &Found<'_>) -> ClipInfo {
         filter_amount,
         effect,
         effect_amount,
+        blend: presets::blend_of(c),
         audio_clip: if f.kind == TrackKind::Video { sound.map(|a| a.clip.id.0) } else { None },
     }
 }

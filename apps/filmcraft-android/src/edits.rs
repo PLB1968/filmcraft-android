@@ -118,20 +118,44 @@ pub(crate) fn free_lane_index(
     except: Option<ClipId>,
 ) -> Result<usize, MobileError> {
     let (_, seq) = model::sequence(s)?;
-    let tracks = if kind == TrackKind::Video { &seq.video_tracks } else { &seq.audio_tracks };
-    if let Some(w) = want.filter(|&w| w >= first)
-        && tracks.get(w).is_some_and(|t| free(&t.items, start, end, except))
-    {
-        return Ok(w);
-    }
-    if let Some(i) = tracks.iter().enumerate().skip(first).find(|(_, t)| free(&t.items, start, end, except)).map(|(i, _)| i) {
+    if let Some(i) = find_free_lane(seq, kind, first, want, start, end, except) {
         return Ok(i);
     }
+    let tracks = if kind == TrackKind::Video { &seq.video_tracks } else { &seq.audio_tracks };
     let missing = first.saturating_sub(tracks.len()) + 1;
     let n = tracks.len();
     let p = if kind == TrackKind::Video { json!({"video": missing, "audio": 0}) } else { json!({"video": 0, "audio": missing}) };
     ex(s, "sequence.addTracks", p)?;
     Ok(n.max(first))
+}
+
+/// The lane [`free_lane_index`] picks when one is free, without adding any: `None` when it would
+/// add a track (the new lane's index is then the track count, or `first` if that is more).
+pub(crate) fn find_free_lane(
+    seq: &filmcraft_project::Sequence,
+    kind: TrackKind,
+    first: usize,
+    want: Option<usize>,
+    start: Tick,
+    end: Tick,
+    except: Option<ClipId>,
+) -> Option<usize> {
+    let tracks = if kind == TrackKind::Video { &seq.video_tracks } else { &seq.audio_tracks };
+    if let Some(w) = want.filter(|&w| w >= first)
+        && tracks.get(w).is_some_and(|t| free(&t.items, start, end, except))
+    {
+        return Some(w);
+    }
+    tracks.iter().enumerate().skip(first).find(|(_, t)| free(&t.items, start, end, except)).map(|(i, _)| i)
+}
+
+/// The overlay lane (1 = V2, 2 = V3…) a picture over `[start, start + duration)` goes on: the
+/// lowest free one, or the new lane above the others when none is.
+pub(crate) fn free_overlay_lane(s: &Session, start: i64, duration: i64) -> Result<i32, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let (start, end) = (ticks(start), ticks(start) + ticks(duration));
+    let i = find_free_lane(seq, TrackKind::Video, 1, None, start, end, None).unwrap_or_else(|| seq.video_tracks.len().max(1));
+    Ok(i32::try_from(i).unwrap_or(i32::MAX))
 }
 
 fn clips_of(v: &Value, key: &str) -> Vec<u64> {
@@ -186,6 +210,44 @@ pub(crate) fn add_media(s: &mut Session, paths: &[String]) -> Result<Vec<u64>, M
                 ripple_main(s, at, |s| s.execute("timeline.place", json!({"item": item, "time": at.0, "track": "V1", "audioTrack": "A1", "insert": true})))?;
             let placed = clips_of(&r, "clips");
             // the video clip (not its audio) is the one the phone shows
+            let (_, seq) = model::sequence(s).map_err(|e| other(e.to_string()))?;
+            if let Some(v) = placed.iter().filter_map(|&c| model::find(seq, ClipId(c))).find(|f| f.kind == TrackKind::Video) {
+                at = v.clip.end();
+                out.push(v.clip.id.0);
+            }
+        }
+        Ok(out)
+    })?;
+    select_one(s, r.first().copied())?;
+    Ok(r)
+}
+
+/// Add pictures and videos as overlays at the playhead, back to back, each on the lowest overlay
+/// lane (V2 and up) free for its length; a video's sound goes on a free audio lane (A2 and up).
+/// Sounds go onto audio lanes at the playhead, as with [`add_media`]. The main track doesn't
+/// change. Returns the new clips (the first is selected).
+pub(crate) fn add_overlay(s: &mut Session, paths: &[String]) -> Result<Vec<u64>, MobileError> {
+    let items = import(s, paths)?;
+    let r = s.edit_group("Add Overlay", |s| {
+        let mut out = Vec::new();
+        let mut at = s.playhead();
+        for &item in &items {
+            let len = item_duration(s, item);
+            if item_kind(s, item) == Some(filmcraft_media::MediaKind::AudioOnly) {
+                let lane = free_lane(s, TrackKind::Audio, 1, None, at, at + len, None).map_err(|e| other(e.to_string()))?;
+                let r = s.execute("timeline.place", json!({"item": item, "time": at.0, "track": lane}))?;
+                out.extend(clips_of(&r, "clips"));
+                continue;
+            }
+            let end = s.sequence_rate().snap_nearest(at + len);
+            let lane = free_lane(s, TrackKind::Video, 1, None, at, end, None).map_err(|e| other(e.to_string()))?;
+            let mut p = json!({"item": item, "time": at.0, "track": lane});
+            if s.project.source_streams(ItemId(item)).1 {
+                p["audioTrack"] = json!(free_lane(s, TrackKind::Audio, 1, None, at, end, None).map_err(|e| other(e.to_string()))?);
+            } else {
+                p["audio"] = json!(false);
+            }
+            let placed = clips_of(&s.execute("timeline.place", p)?, "clips");
             let (_, seq) = model::sequence(s).map_err(|e| other(e.to_string()))?;
             if let Some(v) = placed.iter().filter_map(|&c| model::find(seq, ClipId(c))).find(|f| f.kind == TrackKind::Video) {
                 at = v.clip.end();
@@ -704,6 +766,31 @@ pub(crate) fn set_opacity(s: &mut Session, id: u64, opacity: f64, merge: bool, a
     Ok(())
 }
 
+/// Set how an overlay mixes with what is under it (a [`presets::blends`] id). `merge` folds trying
+/// one mode after another into one undo step. The main track has nothing under it to blend with.
+pub(crate) fn set_blend(s: &mut Session, id: u64, blend: &str, merge: bool) -> Result<(), MobileError> {
+    let (kind, track, c) = locate(s, id)?;
+    if kind != TrackKind::Video {
+        return Err(MobileError::Command("Only pictures and videos take this.".into()));
+    }
+    if is_main(kind, track) {
+        return Err(MobileError::Command("Blend modes are for overlays: drag the clip above the main track first.".into()));
+    }
+    let choice = presets::blend_choice(blend).ok_or_else(|| MobileError::Command(format!("Unknown blend mode {blend}.")))?;
+    let key = format!("blend:{id}");
+    s.edit_sequence_as("Blend Mode", merge.then_some(key.as_str()), |q, _, _| set_blend_choice(q, c.id, choice))?;
+    settle(s);
+    Ok(())
+}
+
+fn set_blend_choice(q: &mut filmcraft_project::Sequence, clip: ClipId, choice: u32) -> filmcraft_engine::Result<()> {
+    let c = q.find_item_mut(clip).map(|x| x.1).ok_or_else(|| other("clip gone"))?;
+    let p = c.effects.iter_mut().find(|e| e.effect == "opacity").and_then(|e| e.param_mut("blend")).ok_or_else(|| other("This clip can't blend."))?;
+    p.value = ParamValue::Choice(choice);
+    p.keyframes.clear();
+    Ok(())
+}
+
 /// Flip a clip's picture left-right (`horizontal`) or upside down.
 pub(crate) fn set_flip(s: &mut Session, id: u64, horizontal: bool, on: bool) -> Result<(), MobileError> {
     let clips = picture_clips(s, id, false)?;
@@ -939,17 +1026,127 @@ fn seq_end(s: &Session) -> Tick {
     s.active_sequence().map(|q| q.duration()).unwrap_or(Tick::ZERO)
 }
 
-/// Move an overlay or audio clip to `start` on lane `index` (1, 2… overlays; -1, -2… audio). A
-/// lane that is taken there sends it to the nearest free one.
+/// A video or picture from a file (not text, a blank or a sound): what moves between the main
+/// track and the overlays.
+fn is_footage(s: &Session, c: &TrackItem) -> bool {
+    matches!(s.project.item(c.item).map(|p| &p.kind), Some(filmcraft_project::ItemKind::Media(m)) if matches!(m.media, filmcraft_project::MediaRef::File { .. }))
+}
+
+/// Move a clip to `start` on lane `index` (0 the main track; 1, 2… overlays; -1, -2… audio). A
+/// lane that is taken there sends it to the nearest free one. Videos and pictures also move
+/// between the main track and the overlays; other main-track clips are reordered instead, and
+/// text stays on the overlays. One undo step.
 pub(crate) fn move_clip(s: &mut Session, id: u64, index: i32, start: i64) -> Result<(), MobileError> {
     let (kind, track, c) = locate(s, id)?;
-    if is_main(kind, track) {
+    let start = s.sequence_rate().snap_nearest(ticks(start));
+    let main = is_main(kind, track);
+    if kind == TrackKind::Video && (main != (index == 0)) {
+        if !is_footage(s, &c) {
+            let msg = if main { "Only videos and photos move onto an overlay." } else { "Only videos and photos go on the main track." };
+            return Err(MobileError::Command(msg.into()));
+        }
+        if main {
+            return to_overlay(s, &c, usize::try_from(index.unsigned_abs()).unwrap_or(1).max(1), start);
+        }
+        return to_main(s, &c, start);
+    }
+    if main {
         return Err(MobileError::Command("Main-track clips are reordered instead.".into()));
     }
-    let start = s.sequence_rate().snap_nearest(ticks(start));
     let want = usize::try_from(index.unsigned_abs()).ok().filter(|&w| w >= 1);
-    let lane = free_lane(s, kind, 1, want, start, start + c.duration, Some(c.id))?;
-    ex(s, "timeline.move", json!({"moves": [{"clip": c.id.0, "track": lane, "time": start.0}], "insert": false}))?;
+    // a new lane and the move are one step
+    s.edit_group("Move", |s| {
+        let lane = free_lane(s, kind, 1, want, start, start + c.duration, Some(c.id)).map_err(|e| other(e.to_string()))?;
+        s.execute("timeline.move", json!({"moves": [{"clip": c.id.0, "track": lane, "time": start.0}], "insert": false}))
+    })?;
+    Ok(())
+}
+
+/// The audio clip carrying a video clip's sound, if it has one.
+fn sound_partner(s: &Session, c: &TrackItem) -> Option<ClipId> {
+    let seq = s.active_sequence()?;
+    model::partner(seq, c, TrackKind::Audio).map(|f| f.clip.id)
+}
+
+/// Free lanes for video clip `v` (and its sound `a`) at `start`, preferring overlay `want`: an
+/// overlay lane, and an audio lane of its own (A2 and up) for the sound. Adds the lanes it needs.
+fn overlay_lanes(
+    s: &mut Session,
+    v: ClipId,
+    a: Option<ClipId>,
+    want: usize,
+    start: Tick,
+    dur: Tick,
+) -> filmcraft_engine::Result<(String, Option<(ClipId, String)>)> {
+    let end = start + dur;
+    let lane = free_lane(s, TrackKind::Video, 1, Some(want), start, end, Some(v)).map_err(|e| other(e.to_string()))?;
+    let Some(a) = a else { return Ok((lane, None)) };
+    let (_, seq) = model::sequence(s).map_err(|e| other(e.to_string()))?;
+    let now = model::find(seq, a).map(|f| f.track).filter(|&t| t >= 1);
+    let alane = free_lane(s, TrackKind::Audio, 1, now, start, end, Some(a)).map_err(|e| other(e.to_string()))?;
+    Ok((lane, Some((a, alane))))
+}
+
+/// Move video clip `v` (and its sound) to the lanes [`overlay_lanes`] picked, at `start`.
+fn move_to_lanes(s: &mut Session, v: ClipId, lanes: &(String, Option<(ClipId, String)>), start: Tick) -> filmcraft_engine::Result<()> {
+    let mut moves = vec![json!({"clip": v.0, "track": lanes.0, "time": start.0})];
+    if let Some((a, alane)) = &lanes.1 {
+        moves.push(json!({"clip": a.0, "track": alane, "time": start.0}));
+    }
+    s.execute("timeline.move", json!({"moves": moves, "insert": false, "linked": false}))?;
+    Ok(())
+}
+
+/// A main-track video or picture up onto overlay `want` (or the nearest free one) at `start`; the
+/// main track closes the gap it leaves, and later items on the other lanes move up with it.
+fn to_overlay(s: &mut Session, c: &TrackItem, want: usize, start: Tick) -> Result<(), MobileError> {
+    let a = sound_partner(s, c);
+    s.edit_group("Move to Overlay", |s| {
+        let more_after = main_end(s)? > c.end();
+        // lanes added before the ripple sit it out like the others
+        let lanes = overlay_lanes(s, c.id, a, want, start, c.duration)?;
+        ripple_main(s, c.end(), |s| {
+            move_to_lanes(s, c.id, &lanes, start)?;
+            if more_after {
+                s.execute("sequence.closeGap", json!({"track": "V1", "time": c.start.0}))?;
+            }
+            Ok(())
+        })?;
+        // the lanes moved up with the main track, the clip with them: back to where it was dropped
+        let (_, seq) = model::sequence(s).map_err(|e| other(e.to_string()))?;
+        if let Some(f) = model::find(seq, c.id).filter(|f| f.clip.start != start) {
+            let lane = f.track;
+            let lanes = overlay_lanes(s, c.id, a, lane, start, c.duration)?;
+            move_to_lanes(s, c.id, &lanes, start)?;
+        }
+        Ok(())
+    })?;
+    select_one(s, Some(c.id.0))?;
+    Ok(())
+}
+
+/// An overlay video or picture down into the main track, at the cut nearest `start` (the main
+/// track makes room); its sound goes back to A1. It drops its blend mode: nothing is under it.
+fn to_main(s: &mut Session, c: &TrackItem, start: Tick) -> Result<(), MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let cuts = std::iter::once(Tick::ZERO).chain(model::main_clips(seq).into_iter().map(|m| m.1));
+    let at = cuts.min_by_key(|&t| (t - start).0.unsigned_abs()).unwrap_or(Tick::ZERO);
+    let a = sound_partner(s, c);
+    let blended = presets::blend_of(c) != "normal";
+    s.edit_group("Move to Main Track", |s| {
+        ripple_main(s, at, |s| {
+            let mut moves = vec![json!({"clip": c.id.0, "track": "V1", "time": at.0})];
+            if let Some(a) = a {
+                moves.push(json!({"clip": a.0, "track": "A1", "time": at.0}));
+            }
+            s.execute("timeline.move", json!({"moves": moves, "insert": true, "linked": false}))
+        })?;
+        if blended {
+            s.edit_sequence("Blend Mode", |q, _, _| set_blend_choice(q, c.id, 0))?;
+        }
+        Ok(())
+    })?;
+    select_one(s, Some(c.id.0))?;
     Ok(())
 }
 

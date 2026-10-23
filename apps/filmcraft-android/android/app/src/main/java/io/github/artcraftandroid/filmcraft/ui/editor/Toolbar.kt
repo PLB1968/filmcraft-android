@@ -107,6 +107,7 @@ private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modif
 
 private fun addTools(ed: EditorController) = listOf(
     Tool("editor_tool_audio", "Audio", LucideIcons.Music.glyph()) { ed.submenu = Submenu.AddAudio },
+    Tool("editor_tool_overlay", "Overlay", LucideIcons.Layers.glyph()) { ed.addOverlay() },
     Tool("editor_tool_text", "Text", LucideIcons.Type.glyph()) { ed.panel = Panel.TextInput(null) },
     Tool("editor_tool_captions", "Captions", LucideIcons.Captions.glyph(), enabled = ed.duration > 0) { ed.panel = Panel.Captions },
     Tool("editor_tool_files", "Files", LucideIcons.File.glyph()) { ed.submenu = Submenu.Files },
@@ -141,6 +142,8 @@ private fun clipTools(ed: EditorController, c: ClipInfo): List<Tool> {
         Tool("editor_tool_filters", "Filters", LucideIcons.SwatchBook.glyph()) { ed.panel = Panel.Filters },
         if (onMain) Tool("editor_tool_effects", "Effects", LucideIcons.WandSparkles.glyph()) { ed.panel = Panel.Effects } else null,
         Tool("editor_tool_opacity", "Opacity", Glyphs.Checker) { ed.panel = Panel.Opacity },
+        // an overlay mixes with what is under it; the main track has nothing under it
+        if (!onMain) Tool("editor_tool_blend", "Blend", LucideIcons.Blend.glyph()) { ed.panel = Panel.Blend } else null,
         // Lucide names these by their axis line: "flip-vertical-2" has left/right arrows (a mirror)
         // one-tap toggles with no on/off look: the preview shows which way the picture faces
         Tool("editor_tool_flip_h", "Mirror", LucideIcons.FlipVertical2.glyph()) { ed.toggleMirror() },

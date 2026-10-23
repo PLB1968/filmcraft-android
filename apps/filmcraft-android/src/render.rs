@@ -243,6 +243,21 @@ impl Renderer {
         Ok(crop(&f, (l * k) as u32, (t * k) as u32, ((r - l) * k) as u32, ((b - t) * k) as u32))
     }
 
+    /// The frame at `time` with overlay `clip` mixed by blend mode `blend` (a
+    /// [`crate::blend_presets`] id) instead of its own: the Blend panel's previews. The whole
+    /// frame, since a blend shows in how the overlay meets what is under it.
+    pub fn blend_preview(&self, clip: u64, blend: String, time: i64, max_side: u32) -> Result<Frame, MobileError> {
+        let choice = crate::presets::blend_choice(&blend).ok_or_else(|| MobileError::Command(format!("Unknown blend mode {blend}.")))?;
+        let mut project = (*self.project).clone();
+        let seq = project.sequence_mut(self.seq).ok_or(MobileError::NoSequence)?;
+        let c = seq.find_item_mut(filmcraft_project::ClipId(clip)).map(|x| x.1).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
+        let p = c.effects.iter_mut().find(|e| e.effect == "opacity").and_then(|e| e.param_mut("blend"));
+        let p = p.ok_or_else(|| MobileError::Command("This clip can't blend.".into()))?;
+        p.value = filmcraft_project::ParamValue::Choice(choice);
+        p.keyframes.clear();
+        self.draw_variant(project, time, max_side)
+    }
+
     /// The frame in the middle of a transition `preset` of `seconds` put between `from` and `to`
     /// on the main track (either empty at the ends): the transition picker's previews.
     pub fn transition_preview(&self, from: Option<u64>, to: Option<u64>, preset: String, seconds: f64, max_side: u32) -> Result<Frame, MobileError> {

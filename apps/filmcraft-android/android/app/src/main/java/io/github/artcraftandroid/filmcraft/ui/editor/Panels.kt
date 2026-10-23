@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.artcraftandroid.filmcraft.core.ClipInfo
 import io.github.artcraftandroid.filmcraft.core.PresetInfo
+import io.github.artcraftandroid.filmcraft.core.blendPresets
 import io.github.artcraftandroid.filmcraft.core.effectPresets
 import io.github.artcraftandroid.filmcraft.core.effectSample
 import io.github.artcraftandroid.filmcraft.core.transitionSample
@@ -80,6 +81,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Opacity -> clip?.let { OpacityPanel(ed, it, close, modifier) }
         Panel.Filters -> clip?.let { LookPanel(ed, it, filters = true, close, modifier) }
         Panel.Effects -> clip?.let { LookPanel(ed, it, filters = false, close, modifier) }
+        Panel.Blend -> clip?.takeIf { !ed.isMain(it.id) }?.let { BlendPanel(ed, it, close, modifier) }
         is Panel.Transitions -> TransitionPanel(ed, panel, close, modifier)
         Panel.AspectRatio -> AspectPanel(ed, close, modifier)
         Panel.TextStyle -> clip?.let { TextStylePanel(ed, it, close, modifier) }
@@ -309,6 +311,40 @@ private fun LookPanel(ed: EditorController, c: ClipInfo, filters: Boolean, close
         } else {
             Spacer(Modifier.height(12.dp))
         }
+    }
+}
+
+/** The blend modes, each tile the frame at the playhead with the overlay mixed that way. */
+@Composable
+private fun BlendPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: Modifier) {
+    val modes: List<PresetInfo> = remember { blendPresets() }
+    val renderer by produceState<io.github.artcraftandroid.filmcraft.core.Renderer?>(null, ed.timeline?.revision) { value = runCatching { ed.engine.command { renderer() } }.getOrNull() }
+    val time = ed.playhead.coerceIn(c.start, c.start + c.duration - ed.frameTicks)
+    ToolPanel(
+        "Blend", close, modifier, tag = "blend_panel",
+        actions = {
+            PanelAction(LucideIcons.Undo2.glyph(), "Revert", { ed.setBlend("normal") }, tag = "blend_revert_button")
+        },
+    ) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(84.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(max = 252.dp).padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(modes, key = { it.id }) { m ->
+                PresetTile(m.name, c.blend == m.id, { ed.setBlend(m.id) }, tag = "blend_item_${m.id}") {
+                    val img = rememberPreview(listOf(renderer?.revision(), m.id, time / (TPS / 2))) {
+                        val r = renderer ?: return@rememberPreview null
+                        withContext(ed.engine.thumbnails) {
+                            runCatching { r.blendPreview(c.id, m.id, time, 160u).toBitmap()?.asImageBitmap() }.getOrNull()
+                        }
+                    }
+                    if (img != null) Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
     }
 }
 

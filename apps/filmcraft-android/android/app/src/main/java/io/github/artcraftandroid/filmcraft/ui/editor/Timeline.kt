@@ -371,7 +371,35 @@ private class Geometry(
     /** A picked-up clip let go after moving by (dx, dy). */
     fun drop(e: EditorController, c: ClipInfo, dx: Float, dy: Float, start: Offset) {
         val lane = t.lanes.firstOrNull { l -> l.clips.any { it.id == c.id } } ?: return
-        if (lane.kind == LaneKind.MAIN) {
+        val laneY = (tops.getOrElse(t.lanes.indexOf(lane)) { 0f }) + dy + heights.getOrElse(t.lanes.indexOf(lane)) { 0f } / 2f
+        // videos and photos go between the main track and the overlays; text, blanks and sounds
+        // stay on their kind of lane
+        val footage = (c.kind == ClipKind.VIDEO || c.kind == ClipKind.IMAGE) && lane.kind != LaneKind.AUDIO
+        val kinds = if (footage) setOf(LaneKind.MAIN, LaneKind.OVERLAY) else setOf(lane.kind)
+        var target = lane.index
+        var best = Float.MAX_VALUE
+        for ((i, l) in t.lanes.withIndex()) {
+            if (l.kind !in kinds) continue
+            val cy = tops[i] + heights[i] / 2f
+            if (abs(cy - laneY) < best) {
+                best = abs(cy - laneY)
+                target = l.index
+            }
+        }
+        // past the outermost lane: a new lane (above the main track when there are no overlays yet)
+        val outer = if (LaneKind.OVERLAY in kinds) {
+            t.lanes.filter { it.kind == LaneKind.OVERLAY }.maxByOrNull { it.index } ?: t.lanes.firstOrNull { it.kind == LaneKind.MAIN }
+        } else {
+            t.lanes.filter { it.kind == lane.kind }.maxByOrNull { abs(it.index) }
+        }
+        // (the main track's other clips only reorder)
+        if (outer != null && (footage || lane.kind != LaneKind.MAIN)) {
+            val oi = t.lanes.indexOf(outer)
+            val up = outer.kind != LaneKind.AUDIO
+            val beyond = if (up) laneY < tops[oi] - 8f * dp else laneY > tops[oi] + heights[oi] + 8f * dp
+            if (beyond) target = if (up) outer.index + 1 else outer.index - 1
+        }
+        if (lane.kind == LaneKind.MAIN && target == 0) {
             val main = lane.clips.filter { it.id != c.id }
             val finger = time(start.x + dx)
             // where it lands among the others, laid end to end without it
@@ -388,25 +416,9 @@ private class Geometry(
             if (slot != from) e.reorder(c.id, slot)
             return
         }
+        // onto an overlay or audio lane at the time it was dropped at; down onto the main track at
+        // the cut nearest its start (the engine picks it)
         val newStart = (c.start + TimelineMath.ticksFor(dx, pxPerSecond)).coerceAtLeast(0)
-        val laneY = (tops.getOrElse(t.lanes.indexOf(lane)) { 0f }) + dy + heights.getOrElse(t.lanes.indexOf(lane)) { 0f } / 2f
-        var target = lane.index
-        var best = Float.MAX_VALUE
-        for ((i, l) in t.lanes.withIndex()) {
-            if (l.kind != lane.kind) continue
-            val cy = tops[i] + heights[i] / 2f
-            if (abs(cy - laneY) < best) {
-                best = abs(cy - laneY)
-                target = l.index
-            }
-        }
-        // past the outermost lane of its kind: a new lane
-        val outer = t.lanes.filter { it.kind == lane.kind }.maxByOrNull { abs(it.index) }
-        if (outer != null) {
-            val oi = t.lanes.indexOf(outer)
-            val beyond = if (lane.kind == LaneKind.OVERLAY) laneY < tops[oi] - 8f * dp else laneY > tops[oi] + heights[oi] + 8f * dp
-            if (beyond) target = if (lane.kind == LaneKind.OVERLAY) outer.index + 1 else outer.index - 1
-        }
         e.move(c.id, target, TimelineMath.snap(newStart, e.rateNum, e.rateDen))
     }
 }

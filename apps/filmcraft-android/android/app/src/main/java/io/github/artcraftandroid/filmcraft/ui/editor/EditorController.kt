@@ -48,6 +48,8 @@ sealed interface Panel {
     data object Opacity : Panel
     data object Filters : Panel
     data object Effects : Panel
+    /** How an overlay mixes with what is under it. */
+    data object Blend : Panel
     /** The transition between [from] and [to] (either empty at the ends). */
     data class Transitions(val from: ULong?, val to: ULong?) : Panel
     /** Typing text: a new clip ([clip] empty), editing one, or a caption's words ([caption]). */
@@ -427,8 +429,17 @@ class EditorController(
         host.pick(kind) { uris -> if (uris.isNotEmpty()) importAndAdd(uris, audio = kind == PickKind.FilesAudio) }
     }
 
-    /** Add picked media; [first] is a new project's starting media, which can't be undone away. */
-    fun importAndAdd(uris: List<Uri>, audio: Boolean, first: Boolean = false) {
+    /** Add photos and videos over the main video at the playhead, on the lowest free overlay lane. */
+    fun addOverlay() {
+        submenu = Submenu.None
+        host.pick(PickKind.PhotosAndVideos) { uris -> if (uris.isNotEmpty()) importAndAdd(uris, audio = false, overlay = true) }
+    }
+
+    /**
+     * Add picked media: to the main track, audio lanes ([audio]) or overlays ([overlay]); [first]
+     * is a new project's starting media, which can't be undone away.
+     */
+    fun importAndAdd(uris: List<Uri>, audio: Boolean, first: Boolean = false, overlay: Boolean = false) {
         stop()
         scope.launch {
             busy = "Adding media…"
@@ -438,7 +449,7 @@ class EditorController(
                     host.tell("That file can't be added.")
                 } else {
                     engine.command {
-                        if (audio) addAudio(paths) else addMedia(paths)
+                        if (audio) addAudio(paths) else if (overlay) addOverlay(paths) else addMedia(paths)
                         if (first) forgetHistory()
                     }
                     if (paths.size < uris.size) host.tell("Some files couldn't be added.")
@@ -502,6 +513,7 @@ class EditorController(
     fun setOpacity(v: Double, all: Boolean = false) = withSelected { c -> quickEdit { setOpacity(c.id, v, !all, all) } }
     fun setFilter(id: String, amount: Double, merge: Boolean, all: Boolean = false) = withSelected { c -> quickEdit { setFilter(c.id, id, amount, merge, all) } }
     fun setEffect(id: String, amount: Double, merge: Boolean, all: Boolean = false) = withSelected { c -> quickEdit { setEffect(c.id, id, amount, merge, all) } }
+    fun setBlend(id: String, merge: Boolean = false) = withSelected { c -> quickEdit { setBlend(c.id, id, merge) } }
 
     /** Put a transition on a cut (none for a blank [preset]) and play it. */
     fun setTransition(from: ULong?, to: ULong?, preset: String, seconds: Double, all: Boolean = false) {
