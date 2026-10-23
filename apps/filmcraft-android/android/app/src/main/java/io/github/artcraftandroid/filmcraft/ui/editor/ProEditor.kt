@@ -210,8 +210,10 @@ private fun DesktopLayout(ed: EditorController) {
             val w = maxWidth
             val h = maxHeight
             // Effect Controls: a side panel, drag its edge to resize
-            val side = (if (ed.proSideWidth > 0f) with(density) { ed.proSideWidth.toDp() } else min(320f, w.value * 0.28f).dp).coerceIn(200.dp, max(200f, w.value * 0.5f).dp)
-            val monitors = (if (ed.proMonitorHeight > 0f) with(density) { ed.proMonitorHeight.toDp() } else h * 0.45f).coerceIn(120.dp, max(120f, (h - 180.dp).value).dp)
+            val sideMax = max(200f, w.value * 0.5f).dp
+            val side = (ed.proPanes[ProPane.SIDE]?.let { w * it } ?: min(320f, w.value * 0.28f).dp).coerceIn(200.dp, sideMax)
+            val monitorsMax = max(120f, (h - 180.dp).value).dp
+            val monitors = (ed.proPanes[ProPane.MONITORS]?.let { h * it } ?: (h * 0.45f)).coerceIn(120.dp, monitorsMax)
             Row(Modifier.fillMaxSize()) {
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     Row(Modifier.fillMaxWidth().height(monitors)) {
@@ -220,8 +222,8 @@ private fun DesktopLayout(ed: EditorController) {
                         ProgramMonitor(ed, Modifier.weight(1f).fillMaxHeight())
                     }
                     Divider(horizontal = true, "Resize monitors") { d ->
-                        val now = if (ed.proMonitorHeight > 0f) ed.proMonitorHeight else with(density) { monitors.toPx() }
-                        ed.proMonitorHeight = (now + d).coerceIn(with(density) { 120.dp.toPx() }, with(density) { max(120f, (h - 180.dp).value).dp.toPx() })
+                        val now = with(density) { (ed.proPanes[ProPane.MONITORS]?.let { h * it } ?: monitors).coerceIn(120.dp, monitorsMax).toPx() }
+                        ed.setPane(ProPane.MONITORS, with(density) { (now + d).toDp() }.coerceIn(120.dp, monitorsMax) / h)
                     }
                     Row(Modifier.fillMaxWidth().weight(1f)) {
                         ProToolBar(ed, vertical = true)
@@ -229,8 +231,8 @@ private fun DesktopLayout(ed: EditorController) {
                     }
                 }
                 Divider(horizontal = false, "Resize Effect Controls") { d ->
-                    val now = if (ed.proSideWidth > 0f) ed.proSideWidth else with(density) { side.toPx() }
-                    ed.proSideWidth = (now - d).coerceIn(with(density) { 200.dp.toPx() }, with(density) { max(200f, w.value * 0.5f).dp.toPx() })
+                    val now = with(density) { (ed.proPanes[ProPane.SIDE]?.let { w * it } ?: side).coerceIn(200.dp, sideMax).toPx() }
+                    ed.setPane(ProPane.SIDE, with(density) { (now - d).toDp() }.coerceIn(200.dp, sideMax) / w)
                 }
                 Column(Modifier.width(side).fillMaxHeight()) {
                     PanelTabs(listOf("Effect Controls", "Project"), ed.proSideTab) { ed.proSideTab = it }
@@ -244,13 +246,21 @@ private fun DesktopLayout(ed: EditorController) {
 
 @Composable
 private fun PortraitLayout(ed: EditorController) {
+    val density = LocalDensity.current
     Column(Modifier.fillMaxSize()) {
         ProTopBar(ed)
+        // the panel tabs on top, then the Program monitor (drag its bottom edge to resize it), then the panel
+        PanelTabs(listOf("Timeline", "Source", "Effects", "Project"), ed.proTab) { ed.proTab = it }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
-            val monitor = maxHeight * 0.38f
+            val h = maxHeight
+            val monitorMax = max(120f, (h - 200.dp).value).dp
+            val monitor = (ed.proPanes[ProPane.PORTRAIT_MONITOR]?.let { h * it } ?: (h * 0.4f)).coerceIn(120.dp, monitorMax)
             Column(Modifier.fillMaxSize()) {
                 ProgramMonitor(ed, Modifier.fillMaxWidth().height(monitor))
-                PanelTabs(listOf("Timeline", "Source", "Effects", "Project"), ed.proTab) { ed.proTab = it }
+                Divider(horizontal = true, "Resize Program monitor") { d ->
+                    val now = with(density) { (ed.proPanes[ProPane.PORTRAIT_MONITOR]?.let { h * it } ?: monitor).coerceIn(120.dp, monitorMax).toPx() }
+                    ed.setPane(ProPane.PORTRAIT_MONITOR, with(density) { (now + d).toDp() }.coerceIn(120.dp, monitorMax) / h)
+                }
                 when (ed.proTab) {
                     0 -> {
                         ProToolBar(ed, vertical = false)
@@ -265,9 +275,21 @@ private fun PortraitLayout(ed: EditorController) {
     }
 }
 
+/** The keys of Pro mode's resizable panes ([EditorController.proPanes]). */
+object ProPane {
+    /** Phone upright: the Program monitor's share of the space below the tabs. */
+    const val PORTRAIT_MONITOR = "portraitMonitor"
+    /** Tablet: the monitors' share of the height. */
+    const val MONITORS = "monitors"
+    /** Tablet: the side panel's share of the width. */
+    const val SIDE = "side"
+}
+
 /** A drag handle between panels: [horizontal] lies along the width (it resizes heights). */
 @Composable
 private fun Divider(horizontal: Boolean, description: String, onDrag: (Float) -> Unit) {
+    // the gesture outlives a frame: it calls the latest onDrag, which sees the size as it is now
+    val drag by rememberUpdatedState(onDrag)
     Box(
         (if (horizontal) Modifier.fillMaxWidth().height(14.dp) else Modifier.width(14.dp).fillMaxHeight())
             .background(Fc.Black)
@@ -275,12 +297,12 @@ private fun Divider(horizontal: Boolean, description: String, onDrag: (Float) ->
                 if (horizontal) {
                     detectVerticalDragGestures { change, d ->
                         change.consume()
-                        onDrag(d)
+                        drag(d)
                     }
                 } else {
                     detectHorizontalDragGestures { change, d ->
                         change.consume()
-                        onDrag(d)
+                        drag(d)
                     }
                 }
             }
@@ -322,11 +344,11 @@ private fun ProTransport(ed: EditorController) {
         TransportButton(ed, "markIn", ProGlyphs.MarkIn, "Mark In", "pro_program_mark_in", has) { ed.markIn() }
         TransportButton(ed, "markOut", ProGlyphs.MarkOut, "Mark Out", "pro_program_mark_out", has) { ed.markOut() }
         TransportButton(ed, "goToIn", ProGlyphs.GoToIn, "Go to In", "pro_program_go_to_in", ed.pro?.markIn != null) { ed.goToIn() }
-        JumpButton(ProGlyphs.GoToStart, "Go to clip start; hold for the sequence start", "pro_program_go_to_start", has, { ed.goToClipEdge(end = false) }) { ed.goToSequenceEdge(end = false) }
+        JumpButton(ProGlyphs.GoToStart, "Go to previous cut; hold for the sequence start", "pro_program_go_to_start", has, { ed.goToCut(next = false) }) { ed.goToSequenceEdge(end = false) }
         TransportButton(ed, "stepBack", Glyphs.StepBack, "Step Back 1 Frame", "editor_previous_frame_button", has) { ed.step(-1) }
         TransportButton(ed, "play", if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Stop" else "Play", "editor_play_button", has) { ed.togglePlay() }
         TransportButton(ed, "stepForward", Glyphs.StepForward, "Step Forward 1 Frame", "editor_next_frame_button", has) { ed.step(1) }
-        JumpButton(ProGlyphs.GoToEnd, "Go to clip end; hold for the sequence end", "pro_program_go_to_end", has, { ed.goToClipEdge(end = true) }) { ed.goToSequenceEdge(end = true) }
+        JumpButton(ProGlyphs.GoToEnd, "Go to next cut; hold for the sequence end", "pro_program_go_to_end", has, { ed.goToCut(next = true) }) { ed.goToSequenceEdge(end = true) }
         TransportButton(ed, "goToOut", ProGlyphs.GoToOut, "Go to Out", "pro_program_go_to_out", ed.pro?.markOut != null) { ed.goToOut() }
         TransportButton(ed, "addMarker", ProGlyphs.Marker, "Add Marker", "pro_program_add_marker", has) { ed.addMarker() }
         TransportButton(ed, "prevMarker", LucideIcons.ChevronLeft.glyph(), "Go to Previous Marker", "pro_program_prev_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = false) }

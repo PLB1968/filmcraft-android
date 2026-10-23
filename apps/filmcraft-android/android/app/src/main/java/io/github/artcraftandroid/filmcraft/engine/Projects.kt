@@ -29,6 +29,8 @@ data class ProjectEntry(
     val proMode: Boolean? = null,
     /** Pro mode's track heights (dp) by engine track id; tracks not listed have the default. */
     val trackHeights: Map<ULong, Int> = emptyMap(),
+    /** Pro mode's panel sizes (each a share, 0..1, of its space) by pane; others have the default. */
+    val panes: Map<String, Float> = emptyMap(),
 ) {
     val projectFile: File get() = File(dir, PROJECT_FILE)
     val poster: File get() = File(dir, POSTER_FILE)
@@ -75,6 +77,9 @@ class Projects(private val context: Context) {
                 trackHeights = j.optJSONObject("trackHeights")?.let { h ->
                     h.keys().asSequence().mapNotNull { k -> k.toULongOrNull()?.let { it to h.optInt(k) } }.filter { it.second > 0 }.toMap()
                 }.orEmpty(),
+                panes = j.optJSONObject("panes")?.let { h ->
+                    h.keys().asSequence().map { k -> k to h.optDouble(k, 0.0).toFloat() }.filter { it.second > 0f && it.second < 1f }.toMap()
+                }.orEmpty(),
             )
         }.getOrNull()
     }
@@ -90,6 +95,7 @@ class Projects(private val context: Context) {
             .put("height", p.height)
         p.proMode?.let { j.put("proMode", it) }
         if (p.trackHeights.isNotEmpty()) j.put("trackHeights", JSONObject().apply { for ((k, v) in p.trackHeights) put(k.toString(), v) })
+        if (p.panes.isNotEmpty()) j.put("panes", JSONObject().apply { for ((k, v) in p.panes) put(k, v.toDouble()) })
         val f = File(p.dir, ProjectEntry.META_FILE)
         val tmp = File(p.dir, ProjectEntry.META_FILE + ".tmp")
         tmp.writeText(j.toString())

@@ -183,10 +183,18 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                     ed.proPxPerSecond = np
                     setScroll((keep - anchorX / np * TPS).roundToLong())
                 }
-                // playback pages the view along with the playhead
-                if (ed.playing) {
-                    val x = xOf(ed.playhead)
-                    if (x < 0f || x > viewport * 0.92f) SideEffect { setScroll(ed.playhead - (viewport * 0.1f / pps() * TPS).roundToLong()) }
+                // the playhead moved (playback, a frame step, a jump): page the view so it shows, put
+                // near the left edge going forward and near the right going back (a touch on the
+                // timeline only seeks to where the finger is, which is already showing)
+                val shown = remember { longArrayOf(ed.playhead) }
+                if (ed.playhead != shown[0]) {
+                    val t = ed.playhead
+                    val back = t < shown[0]
+                    val x = xOf(t)
+                    SideEffect {
+                        shown[0] = t
+                        if (x < 0f || x > viewport * 0.92f) setScroll(t - ((if (back) viewport * 0.9f else viewport * 0.1f) / pps() * TPS).roundToLong())
+                    }
                 }
                 val gap = with(density) { 6.dp.toPx() }
                 val rows = run {

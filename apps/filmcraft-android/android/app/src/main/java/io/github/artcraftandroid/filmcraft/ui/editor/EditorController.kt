@@ -174,9 +174,11 @@ class EditorController(
     /** Pro mode's timeline view: zoom (0 until laid out) and the time at its left edge. */
     var proPxPerSecond by mutableFloatStateOf(0f)
     var proScroll by mutableLongStateOf(0L)
-    /** Pro mode's panel sizes (px) as the user dragged them, else 0 (the layout's defaults). */
-    var proMonitorHeight by mutableFloatStateOf(0f)
-    var proSideWidth by mutableFloatStateOf(0f)
+    /**
+     * Pro mode's panel sizes as the user dragged them, each a share (0..1) of the space it is cut
+     * from, by [ProPane] key; a pane not listed has the layout's default. Remembered per project.
+     */
+    val proPanes = mutableStateMapOf<String, Float>().apply { putAll(project.panes) }
 
     val media = MediaCache(engine, scope)
     private var renderer: Renderer? = null
@@ -787,12 +789,22 @@ class EditorController(
 
     /** Keep the project's Pro mode and track heights in its listing. */
     private fun rememberView() {
-        val p = project.copy(proMode = proMode, trackHeights = trackHeights.toMap())
+        val p = project.copy(proMode = proMode, trackHeights = trackHeights.toMap(), panes = proPanes.toMap())
         project = p
         scope.launch(Dispatchers.IO) { projects.write(p) }
     }
 
     private var heightsJob: Job? = null
+
+    /** Resize a Pro mode pane ([ProPane]) to [share] of its space; remembered with the project. */
+    fun setPane(key: String, share: Float) {
+        proPanes[key] = share.coerceIn(0.05f, 0.95f)
+        heightsJob?.cancel()
+        heightsJob = scope.launch {
+            delay(300)
+            rememberView()
+        }
+    }
 
     /** Resize a Pro track (dp); remembered with the project. */
     fun setTrackHeight(track: ULong, dp: Int) {
@@ -1185,21 +1197,12 @@ class EditorController(
     fun toggleEffect(e: EffectInfo) = edit { toggleEffect(e.clip, e.index) }
     fun removeEffect(e: EffectInfo) = edit { removeEffect(e.clip, e.index) }
 
-    /**
-     * Go to the selected clip's start (or last frame); with nothing selected, to the cut before
-     * (or after) the playhead.
-     */
-    fun goToClipEdge(end: Boolean) {
+    /** Go to the cut before (or after) the playhead: the nearest clip start or end on any track. */
+    fun goToCut(next: Boolean) {
         val p = pro ?: return
         val frame = TimelineMath.tickOfFrame(1, rateNum, rateDen)
-        val sel = proSelection
-        val c = sel.firstOrNull { cl -> p.videoTracks.any { it.id == cl.track } } ?: sel.firstOrNull()
-        val t = if (c != null) {
-            if (end) c.start + c.duration - frame else c.start
-        } else {
-            val cuts = p.clips.flatMap { listOf(it.start, it.start + it.duration) }.distinct()
-            if (end) cuts.filter { it > playhead + frame / 2 }.minOrNull() else cuts.filter { it < playhead - frame / 2 }.maxOrNull()
-        } ?: return
+        val cuts = p.clips.flatMap { listOf(it.start, it.start + it.duration) }.distinct()
+        val t = (if (next) cuts.filter { it > playhead + frame / 2 }.minOrNull() else cuts.filter { it < playhead - frame / 2 }.maxOrNull()) ?: return
         seek(t.coerceAtLeast(0L), draft = false)
     }
 
