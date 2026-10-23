@@ -994,6 +994,32 @@ class EditorController(
         scope.launch { renderSource() }
     }
 
+    /** Pick media and put it on [track] at [at], over what is there (a double tap on the timeline). */
+    fun addMediaAt(kind: PickKind, track: io.github.artcraftandroid.filmcraft.core.ProTrack, at: Long) {
+        if (track.locked) return host.tell("${track.code} is locked.")
+        host.pick(kind) { uris ->
+            if (uris.isEmpty()) return@pick
+            stop()
+            scope.launch {
+                busy = "Adding media…"
+                try {
+                    val paths = withContext(Dispatchers.IO) { uris.mapNotNull { u -> runCatching { projects.importUri(project, u).absolutePath }.getOrNull() } }
+                    if (paths.isEmpty()) {
+                        host.tell("That file can't be added.")
+                    } else {
+                        engine.command { placeMedia(paths, track.id, at) }
+                        if (paths.size < uris.size) host.tell("Some files couldn't be added.")
+                    }
+                } catch (e: Exception) {
+                    host.tell(e.userMessage)
+                } finally {
+                    busy = null
+                }
+                refresh()
+            }
+        }
+    }
+
     /** Import files into the Project panel without putting them on the timeline. */
     fun importToBin(kind: PickKind) {
         host.pick(kind) { uris ->

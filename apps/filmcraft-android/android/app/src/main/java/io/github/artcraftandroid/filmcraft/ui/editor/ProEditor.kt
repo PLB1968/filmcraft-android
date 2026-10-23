@@ -293,7 +293,7 @@ private fun PanelTitle(title: String, trailing: String = "") {
     Row(Modifier.fillMaxWidth().height(28.dp).background(Fc.Panel).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, style = FcType.Caption, color = Fc.Title)
         Spacer(Modifier.weight(1f))
-        Text(trailing, style = FcType.Caption, color = Fc.AccentLight, maxLines = 1)
+        Text(trailing, style = FcType.Caption.copy(fontFeatureSettings = "tnum"), color = Fc.AccentLight, maxLines = 1)
     }
 }
 
@@ -318,7 +318,7 @@ private fun ProTransport(ed: EditorController) {
     ) {
         Text(
             TimelineMath.timecode(ed.playhead, ed.rateNum, ed.rateDen),
-            style = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = Fc.AccentLight),
+            style = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = Fc.AccentLight, fontFeatureSettings = "tnum"),
             modifier = Modifier.padding(horizontal = 8.dp).testTag("pro_program_timecode"),
         )
         TransportButton(ProGlyphs.MarkIn, "Mark In", "pro_program_mark_in", has) { ed.markIn() }

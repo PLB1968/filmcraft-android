@@ -1512,3 +1512,31 @@ fn the_stopwatch_keyframes_interpolate_and_show_on_the_clip() {
     assert!(pclip(&m, ids[0]).keyframes.is_empty());
     assert_eq!(m.poll().undo_label.as_deref(), Some("Toggle Animation"));
 }
+
+#[test]
+fn media_dropped_on_a_double_tapped_spot_overwrites_there_as_one_step() {
+    let (m, d, ids) = two_clips();
+    m.add_tracks(1, 1).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let (v2, a2) = (t.video_tracks[1].id, t.audio_tracks[1].id);
+    let c = movie(&d, "c.mp4", DemoScene::Plasma, 24);
+    let new = m.place_media(vec![c, picture(&d)], v2, SEC / 2).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let on_v2: Vec<_> = t.clips.iter().filter(|c| c.track == v2).collect();
+    assert_eq!(on_v2.len(), 2, "the movie and the picture");
+    let mut starts: Vec<i64> = on_v2.iter().map(|c| c.start).collect();
+    starts.sort_unstable();
+    assert_eq!(starts, vec![SEC / 2, SEC / 2 + SEC], "back to back from the tapped spot");
+    assert!(new.len() >= 3, "the movie's sound came too");
+    assert_eq!(pclip(&m, ids[0]).start, 0, "nothing else moved");
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Add Media"));
+    m.undo();
+    assert!(m.pro_timeline().unwrap().clips.iter().all(|c| c.track != v2), "one undo step");
+    // a sound tapped onto an audio track lands there
+    let snd = m.place_media(vec![tone(&d, 1.0)], a2, SEC).unwrap();
+    let a = m.pro_timeline().unwrap().clips.into_iter().find(|c| snd.contains(&c.id)).unwrap();
+    assert_eq!((a.track, a.start), (a2, SEC));
+    // a locked track refuses
+    m.set_track(v2, pro::TrackSwitches { locked: Some(true), ..Default::default() }).unwrap();
+    assert!(matches!(m.place_media(vec![picture(&d)], v2, 0), Err(MobileError::Command(_))));
+}

@@ -958,3 +958,52 @@ pub(crate) fn keyframe_times(c: &TrackItem) -> Vec<i64> {
     t.dedup();
     t
 }
+
+// ---- adding media where the timeline was double-tapped ----
+
+/// Import files and put them on the timeline at `time`, one after another, overwriting what is
+/// there (a drop onto the desktop timeline). Pictures go on `track` when it is a video track,
+/// sound on it when it is an audio track; the other half goes to the patched track. One undo
+/// step; returns the new clips.
+pub(crate) fn place_media(s: &mut Session, paths: &[String], track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
+    let items = crate::edits::import(s, paths)?;
+    let (_, seq) = model::sequence(s)?;
+    let tapped = seq.track(TrackId(track)).ok_or_else(|| MobileError::Command("That track is gone.".into()))?;
+    if tapped.locked {
+        return Err(MobileError::Command(format!("{} is locked.", tapped.name)));
+    }
+    let tapped_video = tapped.kind == TrackKind::Video;
+    let tg = s.targeting();
+    let first_video = seq.video_tracks.first().map(|t| t.id);
+    let first_audio = seq.audio_tracks.first().map(|t| t.id);
+    let r = s.edit_group("Add Media", |s| {
+        let mut at = Tick(time.max(0));
+        let mut out = Vec::new();
+        for &item in &items {
+            let (has_video, has_audio) = s.project.source_streams(filmcraft_project::ItemId(item));
+            let mut p = json!({"item": item, "time": at.0, "insert": false});
+            match (tapped_video, has_video) {
+                // the picture on the tapped video track (its sound to the patched audio track)
+                (true, true) => p["track"] = json!(track),
+                // sound alone, tapped on a video track: the patched (or first) audio track
+                (true, false) => p["track"] = json!(tg.audio_dest.or(first_audio).map(|t| t.0)),
+                // a picture tapped on an audio track: its sound there, the picture patched
+                (false, true) if has_audio => p["audioTrack"] = json!(track),
+                (false, true) => p["track"] = json!(tg.video_dest.or(first_video).map(|t| t.0)),
+                (false, false) => p["track"] = json!(track),
+            }
+            let r = s.execute("timeline.place", p)?;
+            let placed: Vec<u64> = r["clips"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect()).unwrap_or_default();
+            // the next file goes where this one ends
+            if let Some(q) = s.active_sequence() {
+                let end = q.video_tracks.iter().chain(&q.audio_tracks).flat_map(|t| &t.items).filter(|c| placed.contains(&c.id.0)).map(|c| c.end()).max();
+                if let Some(e) = end {
+                    at = e;
+                }
+            }
+            out.extend(placed);
+        }
+        Ok(out)
+    })?;
+    Ok(r)
+}
