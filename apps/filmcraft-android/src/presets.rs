@@ -10,6 +10,8 @@
 //!   effect apart from its siblings) and one or more scaled by the intensity (0–100).
 //! - A **transition** is an engine transition with fixed parameters (a push's direction, a wipe's
 //!   angle…).
+//! - A **blend mode** is the Blend Mode choice of a clip's intrinsic Opacity: how an overlay mixes
+//!   with what is under it.
 
 use filmcraft_project::{EffectInstance, ParamValue, TrackItem};
 
@@ -635,4 +637,43 @@ pub(crate) fn transition_of(e: &EffectInstance) -> String {
         .find(|t| t.effect == e.effect && t.fixed.iter().all(|&(id, v)| fixed_matches(e, id, v)))
         .map(|t| t.id.to_string())
         .unwrap_or_else(|| e.effect.clone())
+}
+
+/// The blend modes the phone offers: (id, name, the engine's Blend Mode it is).
+const BLENDS: [(&str, &str, &str); 9] = [
+    ("normal", "Normal", "Normal"),
+    ("multiply", "Multiply", "Multiply"),
+    ("screen", "Screen", "Screen"),
+    ("overlay", "Overlay", "Overlay"),
+    ("darken", "Darken", "Darken"),
+    ("lighten", "Lighten", "Lighten"),
+    ("add", "Add", "Linear Dodge (Add)"),
+    ("soft_light", "Soft Light", "Soft Light"),
+    ("difference", "Difference", "Difference"),
+];
+
+/// The blend modes, in picker order.
+pub(crate) fn blends() -> Vec<PresetInfo> {
+    BLENDS.iter().map(|&(id, name, _)| PresetInfo { id: id.into(), name: name.into() }).collect()
+}
+
+/// The Opacity effect's Blend Mode choice for blend `id`.
+pub(crate) fn blend_choice(id: &str) -> Option<u32> {
+    let (_, _, engine) = BLENDS.iter().find(|b| b.0 == id)?;
+    let i = filmcraft_project::effect::BLEND_MODES.iter().position(|m| m == engine)?;
+    u32::try_from(i).ok()
+}
+
+/// Which blend mode a clip mixes with: one of [`blends`], or the engine's own name, lower case
+/// with underscores, for a mode the phone doesn't offer ("color_burn").
+pub(crate) fn blend_of(c: &TrackItem) -> String {
+    let choice = match c.effects.iter().find(|e| e.effect == "opacity").and_then(|e| e.param("blend")).map(|p| &p.value) {
+        Some(ParamValue::Choice(i)) => *i,
+        _ => 0,
+    };
+    let engine = filmcraft_project::effect::BLEND_MODES.get(choice as usize).copied().unwrap_or("Normal");
+    match BLENDS.iter().find(|b| b.2 == engine) {
+        Some(b) => b.0.to_string(),
+        None => engine.to_lowercase().replace(' ', "_"),
+    }
 }

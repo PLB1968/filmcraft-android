@@ -1017,3 +1017,165 @@ fn a_transition_on_a_cut_without_spare_footage_shortens_the_video_by_its_length(
     m.undo();
     assert_eq!(m.timeline().unwrap().duration, before);
 }
+
+/// Where the engine keeps a clip: its track kind and index (0 = V1 or A1).
+fn engine_lane(m: &MobileSession, id: u64) -> (TrackKind, usize) {
+    let s = m.lock();
+    let (_, seq) = model::sequence(&s).unwrap();
+    let f = model::find(seq, filmcraft_project::ClipId(id)).unwrap();
+    (f.kind, f.track)
+}
+
+fn overlay_of(m: &MobileSession, id: u64) -> Option<i32> {
+    m.timeline().unwrap().lanes.iter().find(|l| l.kind == LaneKind::Overlay && l.clips.iter().any(|c| c.id == id)).map(|l| l.index)
+}
+
+#[test]
+fn overlays_go_on_the_lowest_free_lane_at_the_playhead_over_the_main_video() {
+    let (m, d, ids) = two_clips();
+    let c = movie(&d, "c.mp4", DemoScene::Aurora, 48);
+    m.set_playhead(SEC);
+    assert_eq!(m.free_overlay_lane(SEC, 2 * SEC).unwrap(), 1, "no overlays yet: V2");
+    let ov = m.add_overlay(vec![c]).unwrap();
+    assert_eq!(ov.len(), 1);
+    let v = clip(&m, ov[0]);
+    assert_eq!((v.kind, v.start, v.duration), (ClipKind::Video, SEC, 2 * SEC));
+    assert_eq!(overlay_of(&m, ov[0]), Some(1));
+    assert_eq!(m.timeline().unwrap().selected, Some(ov[0]));
+    // the main track is as it was, and the overlay's sound has a lane of its own
+    let main: Vec<(u64, i64)> = main_clips(&m).iter().map(|c| (c.id, c.start)).collect();
+    assert_eq!(main, vec![(ids[0], 0), (ids[1], 2 * SEC)]);
+    let sound = v.audio_clip.unwrap();
+    assert!(v.has_audio);
+    assert!(engine_lane(&m, sound).1 >= 1, "an overlay's sound stays off A1");
+    // a picture over the same time goes one lane up; later, the lowest lane is free again
+    assert_eq!(m.free_overlay_lane(SEC, SEC).unwrap(), 2);
+    assert_eq!(m.free_overlay_lane(3 * SEC, SEC).unwrap(), 1);
+    let pic = m.add_overlay(vec![picture(&d)]).unwrap()[0];
+    assert_eq!((clip(&m, pic).kind, clip(&m, pic).start), (ClipKind::Image, SEC));
+    assert_eq!(overlay_of(&m, pic), Some(2));
+    assert_eq!(m.free_overlay_lane(SEC, SEC).unwrap(), 3, "every lane is taken then: a new one");
+    // adding is one undo step
+    m.undo();
+    assert_eq!(overlay_of(&m, pic), None);
+    assert_eq!(overlay_of(&m, ov[0]), Some(1));
+    // overlays move, scale, turn and fade like any picture
+    let p = m.placement(ov[0]).unwrap();
+    m.set_placement(ov[0], 300.0, 500.0, p.scale * 0.5, 20.0, true).unwrap();
+    m.set_placement(ov[0], 320.0, 520.0, p.scale * 0.5, 25.0, true).unwrap();
+    let q = m.placement(ov[0]).unwrap();
+    assert_eq!((q.x, q.y, q.rotation), (320.0, 520.0, 25.0));
+    assert!((q.scale - p.scale * 0.5).abs() < 1e-9);
+    m.set_opacity(ov[0], 0.4, false, false).unwrap();
+    assert_eq!(clip(&m, ov[0]).opacity, 0.4);
+    m.undo();
+    m.undo();
+    assert_eq!(m.placement(ov[0]).unwrap().x, p.x, "the gesture was one step");
+    assert_eq!(overlay_of(&m, ov[0]), Some(1));
+}
+
+#[test]
+fn videos_and_photos_drag_between_the_main_track_and_overlays_in_one_undo_step() {
+    let (m, _d, ids) = two_clips();
+    let main = |m: &MobileSession| main_clips(m).iter().map(|c| (c.id, c.start)).collect::<Vec<_>>();
+    let sound = clip(&m, ids[0]).audio_clip.unwrap();
+    // up: the main track closes the gap, the sound leaves A1 with the picture
+    m.move_clip(ids[0], 1, SEC).unwrap();
+    assert_eq!(main(&m), vec![(ids[1], 0)]);
+    assert_eq!(overlay_of(&m, ids[0]), Some(1));
+    assert_eq!(clip(&m, ids[0]).start, SEC);
+    assert_eq!(clip(&m, ids[0]).audio_clip, Some(sound));
+    assert!(engine_lane(&m, sound).1 >= 1);
+    assert!(m.undo().is_some());
+    assert_eq!(main(&m), vec![(ids[0], 0), (ids[1], 2 * SEC)], "one undo puts it back");
+    assert_eq!(engine_lane(&m, sound), (TrackKind::Audio, 0));
+    // dropped after where it was: it lands where it was dropped, not where the gap pulled it
+    m.move_clip(ids[0], 1, 4 * SEC).unwrap();
+    assert_eq!(main(&m), vec![(ids[1], 0)]);
+    assert_eq!(clip(&m, ids[0]).start, 4 * SEC);
+    // down: into the main track at the nearest cut (here its end), the sound back on A1
+    m.move_clip(ids[0], 0, 3 * SEC + SEC / 4).unwrap();
+    assert_eq!(main(&m), vec![(ids[1], 0), (ids[0], 3 * SEC)]);
+    assert_eq!(overlay_of(&m, ids[0]), None);
+    assert_eq!(engine_lane(&m, sound), (TrackKind::Audio, 0));
+    assert!(m.timeline().unwrap().lanes.iter().filter(|l| l.kind == LaneKind::Overlay).all(|l| l.clips.is_empty()));
+    m.undo();
+    assert_eq!(clip(&m, ids[0]).start, 4 * SEC);
+    assert_eq!(overlay_of(&m, ids[0]), Some(1));
+    // down at the start: before everything, later clips make room
+    m.move_clip(ids[0], 0, SEC / 3).unwrap();
+    assert_eq!(main(&m), vec![(ids[0], 0), (ids[1], 2 * SEC)]);
+    // onto a lane that is taken there: the next one up, added with the move as one step
+    m.set_playhead(0);
+    let t = m.add_text("Hi".into()).unwrap().unwrap();
+    assert_eq!(overlay_of(&m, t), Some(1));
+    m.move_clip(ids[1], 1, 0).unwrap();
+    assert_eq!(overlay_of(&m, ids[1]), Some(2));
+    assert_eq!(main(&m), vec![(ids[0], 0)]);
+    m.undo();
+    assert_eq!(main(&m), vec![(ids[0], 0), (ids[1], 2 * SEC)]);
+    assert_eq!(overlay_of(&m, t), Some(1));
+    // text stays on the overlays; blanks stay on the main track
+    assert!(m.move_clip(t, 0, 0).is_err());
+    assert!(overlay_of(&m, t).is_some());
+    let b = m.add_blank().unwrap();
+    assert!(m.move_clip(b, 1, 0).is_err());
+    assert!(main_clips(&m).iter().any(|c| c.id == b));
+}
+
+/// The mean brightness (0–765) of the middle tenth of a frame.
+fn middle(f: &Frame) -> f64 {
+    let (w, h) = (f.width as usize, f.height as usize);
+    let mut sum = 0.0;
+    let mut n = 0.0;
+    for y in h * 9 / 20..h * 11 / 20 {
+        for x in w * 9 / 20..w * 11 / 20 {
+            let p = &f.rgba[(y * w + x) * 4..(y * w + x) * 4 + 3];
+            sum += p.iter().map(|&v| f64::from(v)).sum::<f64>();
+            n += 1.0;
+        }
+    }
+    sum / n
+}
+
+#[test]
+fn blend_modes_mix_an_overlay_with_the_main_video_and_preview_live() {
+    let (m, d, ids) = two_clips();
+    m.set_playhead(0);
+    let ov = m.add_overlay(vec![picture(&d)]).unwrap()[0];
+    let offered: Vec<String> = blend_presets().into_iter().map(|p| p.id).collect();
+    assert_eq!(offered, ["normal", "multiply", "screen", "overlay", "darken", "lighten", "add", "soft_light", "difference"]);
+    assert_eq!(clip(&m, ov).blend, "normal");
+    // trying modes one after another is one undo step, and each reads back as itself
+    for b in &offered {
+        m.set_blend(ov, b.clone(), true).unwrap();
+        assert_eq!(&clip(&m, ov).blend, b);
+    }
+    m.undo();
+    assert_eq!(clip(&m, ov).blend, "normal");
+    assert!(m.set_blend(ov, "sparkle".into(), false).is_err());
+    assert!(m.set_blend(ids[0], "multiply".into(), false).is_err(), "nothing under the main track");
+    // the previews: multiply darkens what is under the picture, screen lightens it
+    let r = m.renderer().unwrap();
+    let at = SEC / 2;
+    let look = |b: &str| middle(&r.blend_preview(ov, b.into(), at, 240).unwrap());
+    let (normal, multiply, screen) = (look("normal"), look("multiply"), look("screen"));
+    assert!(multiply < normal && normal < screen, "{multiply} {normal} {screen}");
+    assert!(r.blend_preview(ov, "sparkle".into(), at, 240).is_err());
+    assert_eq!(clip(&m, ov).blend, "normal", "previews leave the project alone");
+    // the program shows the chosen mode, as the preview did
+    m.set_blend(ov, "multiply".into(), false).unwrap();
+    let shown = middle(&m.renderer().unwrap().frame(at, 240, false, None).unwrap());
+    assert!((shown - multiply).abs() < 8.0, "{shown} {multiply}");
+    // down on the main track it blends with nothing, so it drops the mode; undo brings it back
+    m.move_clip(ov, 0, 0).unwrap();
+    assert_eq!(clip(&m, ov).blend, "normal");
+    m.undo();
+    assert_eq!((overlay_of(&m, ov), clip(&m, ov).blend.as_str()), (Some(1), "multiply"));
+    // and a saved project keeps it
+    let path = d.join("blend.fcproj").to_string_lossy().into_owned();
+    m.save_project(path.clone()).unwrap();
+    let back = MobileSession::new();
+    back.open_project(path).unwrap();
+    assert_eq!(clip(&back, ov).blend, "multiply");
+}

@@ -159,6 +159,12 @@ pub fn transition_presets() -> Vec<PresetInfo> {
     presets::transitions()
 }
 
+/// The blend modes the Blend panel offers, in order.
+#[uniffi::export]
+pub fn blend_presets() -> Vec<PresetInfo> {
+    presets::blends()
+}
+
 #[uniffi::export]
 pub fn text_presets() -> Vec<PresetInfo> {
     text::presets()
@@ -414,6 +420,18 @@ impl MobileSession {
         self.main_edit(|s| edits::add_media(s, &paths))
     }
 
+    /// Add pictures and videos over the main video at the playhead, each on the lowest free
+    /// overlay lane (V2 and up). Returns the new clips.
+    pub fn add_overlay(&self, paths: Vec<String>) -> Result<Vec<u64>, MobileError> {
+        edits::add_overlay(&mut self.lock(), &paths)
+    }
+
+    /// The overlay lane (1 = V2, 2 = V3…) a picture from `start` lasting `duration` would go on:
+    /// the lowest one free then, or the new lane above the others.
+    pub fn free_overlay_lane(&self, start: i64, duration: i64) -> Result<i32, MobileError> {
+        edits::free_overlay_lane(&self.lock(), start, duration)
+    }
+
     /// Add sound files at the playhead on free audio lanes.
     pub fn add_audio(&self, paths: Vec<String>) -> Result<Vec<u64>, MobileError> {
         edits::add_audio(&mut self.lock(), &paths)
@@ -555,6 +573,12 @@ impl MobileSession {
         edits::set_opacity(&mut self.lock(), clip, opacity, merge, all)
     }
 
+    /// How an overlay mixes with what is under it (a [`blend_presets`] id); `merge` folds trying
+    /// modes in a row into one undo step.
+    pub fn set_blend(&self, clip: u64, blend: String, merge: bool) -> Result<(), MobileError> {
+        edits::set_blend(&mut self.lock(), clip, &blend, merge)
+    }
+
     /// Mirror (`horizontal`) or flip a clip's picture.
     pub fn set_flip(&self, clip: u64, horizontal: bool, on: bool) -> Result<(), MobileError> {
         edits::set_flip(&mut self.lock(), clip, horizontal, on)
@@ -570,7 +594,8 @@ impl MobileSession {
         self.main_edit(|s| edits::reorder(s, clip, index))
     }
 
-    /// Move an overlay or audio clip to `start` on lane `index`.
+    /// Move a clip to `start` on lane `index` (0 the main track, 1, 2… overlays, -1, -2… audio):
+    /// videos and pictures go between the main track and the overlays. One undo step.
     pub fn move_clip(&self, clip: u64, index: i32, start: i64) -> Result<(), MobileError> {
         self.main_edit(|s| edits::move_clip(s, clip, index, start))
     }
