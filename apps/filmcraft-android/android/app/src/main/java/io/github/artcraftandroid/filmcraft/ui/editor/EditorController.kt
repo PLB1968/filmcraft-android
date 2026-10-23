@@ -19,6 +19,9 @@ import io.github.artcraftandroid.filmcraft.core.CaptionLook
 import io.github.artcraftandroid.filmcraft.core.CaptionStatus
 import io.github.artcraftandroid.filmcraft.core.ClipInfo
 import io.github.artcraftandroid.filmcraft.core.ClipKind
+import io.github.artcraftandroid.filmcraft.core.EffectInfo
+import io.github.artcraftandroid.filmcraft.core.KeyframeInfo
+import io.github.artcraftandroid.filmcraft.core.ParamInfo
 import io.github.artcraftandroid.filmcraft.core.LaneKind
 import io.github.artcraftandroid.filmcraft.core.MobileSession
 import io.github.artcraftandroid.filmcraft.core.ProClip
@@ -1105,6 +1108,47 @@ class EditorController(
 
     /** Lift (;) or Extract (') the sequence In to Out. */
     fun liftExtract(extract: Boolean) = edit { liftExtract(extract) }
+
+    // ---- Pro mode: Effect Controls ----
+
+    /** Effect Controls' effects for [effectsClip], values at the playhead. */
+    var effects by mutableStateOf<List<EffectInfo>>(emptyList())
+        private set
+    var effectsClip by mutableStateOf<ULong?>(null)
+        private set
+
+    /** Read Effect Controls for [clip] (nothing for none). */
+    suspend fun loadEffects(clip: ULong?) {
+        if (clip == null) {
+            effects = emptyList()
+            effectsClip = null
+            return
+        }
+        val e = runCatching { engine.command { effectControls(clip) } }.getOrNull() ?: emptyList()
+        effects = e
+        effectsClip = clip
+    }
+
+    /** Change a parameter at the playhead; [begin] for the first change of a drag, [merge] for the rest. */
+    fun setParam(e: EffectInfo, p: ParamInfo, value: List<Double>, merge: Boolean, begin: Boolean) =
+        quickEdit { setEffectParam(e.clip, e.index, p.id, value, merge, begin) }
+
+    fun toggleAnimation(e: EffectInfo, p: ParamInfo) = edit { toggleAnimation(e.clip, e.index, p.id) }
+    fun toggleKeyframe(e: EffectInfo, p: ParamInfo) = edit { toggleKeyframe(e.clip, e.index, p.id) }
+    fun deleteKeyframe(e: EffectInfo, p: ParamInfo, k: KeyframeInfo) = edit { deleteKeyframe(e.clip, e.index, p.id, k.mediaTime) }
+    fun moveKeyframe(e: EffectInfo, p: ParamInfo, k: KeyframeInfo, toMedia: Long) = edit { moveKeyframe(e.clip, e.index, p.id, k.mediaTime, toMedia, false) }
+    fun setInterpolation(e: EffectInfo, p: ParamInfo, k: KeyframeInfo, interpolation: String) =
+        edit { setKeyframeInterpolation(e.clip, e.index, p.id, k.mediaTime, interpolation) }
+    fun resetParam(e: EffectInfo, p: ParamInfo) = edit { resetEffectParam(e.clip, e.index, p.id) }
+    fun toggleEffect(e: EffectInfo) = edit { toggleEffect(e.clip, e.index) }
+    fun removeEffect(e: EffectInfo) = edit { removeEffect(e.clip, e.index) }
+
+    /** Go to the previous (or next) keyframe of [p] from the playhead. */
+    fun goToKeyframe(p: ParamInfo, next: Boolean) {
+        val now = playhead
+        val t = if (next) p.keyframes.map { it.time }.filter { it > now }.minOrNull() else p.keyframes.map { it.time }.filter { it < now }.maxOrNull()
+        if (t != null) seek(t.coerceAtLeast(0L), draft = false)
+    }
 
     // ---- export ----
 

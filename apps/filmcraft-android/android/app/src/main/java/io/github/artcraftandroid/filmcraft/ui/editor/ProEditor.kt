@@ -231,7 +231,7 @@ private fun DesktopLayout(ed: EditorController) {
                 }
                 Column(Modifier.width(side).fillMaxHeight()) {
                     PanelTabs(listOf("Effect Controls", "Project"), ed.proSideTab) { ed.proSideTab = it }
-                    if (ed.proSideTab == 0) EffectControls(ed, Modifier.fillMaxWidth().weight(1f))
+                    if (ed.proSideTab == 0) EffectControlsPanel(ed, Modifier.fillMaxWidth().weight(1f))
                     else ProjectPanel(ed, Modifier.fillMaxWidth().weight(1f))
                 }
             }
@@ -254,7 +254,7 @@ private fun PortraitLayout(ed: EditorController) {
                         ProTimelinePanel(ed, compact = true, modifier = Modifier.fillMaxWidth().weight(1f))
                     }
                     1 -> SourceMonitor(ed, Modifier.fillMaxWidth().weight(1f))
-                    2 -> EffectControls(ed, Modifier.fillMaxWidth().weight(1f))
+                    2 -> EffectControlsPanel(ed, Modifier.fillMaxWidth().weight(1f))
                     else -> ProjectPanel(ed, Modifier.fillMaxWidth().weight(1f))
                 }
             }
@@ -566,47 +566,6 @@ private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
                 }
             }
         }
-    }
-}
-
-/** Effect Controls: the selected clip's timing (its effects and keyframes come with the panel's next part). */
-@Composable
-private fun EffectControls(ed: EditorController, modifier: Modifier) {
-    val sel = ed.proSelection
-    val p = ed.pro
-    Column(modifier.background(Fc.Layer1).testTag("pro_effect_controls")) {
-        PanelTitle("Effect Controls")
-        val c = sel.firstOrNull { (p?.videoTracks?.any { t -> t.id == it.track }) == true } ?: sel.firstOrNull()
-        if (c == null || p == null) {
-            Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                Text("Select a clip in the timeline", style = FcType.BodySmall, color = Fc.Detail, textAlign = TextAlign.Center)
-            }
-            return@Column
-        }
-        val track = (p.videoTracks + p.audioTracks).firstOrNull { it.id == c.track }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-            Text(c.name.ifBlank { "Clip" }, style = FcType.Label, color = Fc.Title, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(track?.code ?: "", style = FcType.BodySmall, color = Fc.Secondary)
-            Spacer(Modifier.height(12.dp))
-            val tc = { t: Long -> TimelineMath.timecode(t, p.rateNum, p.rateDen) }
-            InfoRow("Start", tc(c.start))
-            InfoRow("End", tc(c.start + c.duration))
-            InfoRow("Duration", tc(c.duration))
-            InfoRow("Source In", tc(c.sourceIn))
-            if (c.speed != 1.0) InfoRow("Speed", "%.0f%%".format(c.speed * 100))
-            if (sel.size > 1) {
-                Spacer(Modifier.height(8.dp))
-                Text("${sel.size} clips selected", style = FcType.BodySmall, color = Fc.Detail)
-            }
-        }
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().height(32.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = FcType.BodySmall, color = Fc.Secondary, modifier = Modifier.weight(1f))
-        Text(value, style = TextStyle(fontFamily = Inter, fontSize = 14.sp, color = Fc.AccentLight))
     }
 }
 

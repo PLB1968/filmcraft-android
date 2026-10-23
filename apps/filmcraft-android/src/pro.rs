@@ -64,6 +64,8 @@ pub struct ProClip {
     /// The link group it shares with its partners (a video clip and its audio), if any.
     pub link: Option<u64>,
     pub selected: bool,
+    /// Where its keyframes are on the sequence (shown as marks on the clip).
+    pub keyframes: Vec<i64>,
 }
 
 /// A sequence marker.
@@ -170,6 +172,7 @@ fn clips_of(s: &Session, seq: &Sequence) -> Vec<ProClip> {
                     enabled: c.enabled,
                     link: c.link,
                     selected: s.state.selection.contains(&c.id),
+                    keyframes: keyframe_times(c),
                 });
             }
         }
@@ -653,4 +656,305 @@ pub(crate) fn lift_extract(s: &mut Session, extract: bool) -> Result<(), MobileE
     }
     ex(s, if extract { "sequence.extract" } else { "sequence.lift" }, json!({}))?;
     Ok(())
+}
+
+// ---- phase 4: Effect Controls and keyframes ----
+
+/// How a parameter is edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ParamType {
+    /// A number with a slider: `value[0]` between `min` and `max`.
+    Number,
+    /// A point (x, y in frame pixels): `value[0]`, `value[1]`; NaN while it is "auto" (centred).
+    Point,
+    /// Degrees.
+    Angle,
+    /// A checkbox: 0 or 1.
+    Toggle,
+    /// One of `choices`: its index.
+    Choice,
+    /// Red, green, blue, alpha, 0 to 1.
+    Colour,
+    /// Text, curves and masks: shown but edited elsewhere.
+    Other,
+}
+
+/// A keyframe of a parameter.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct KeyframeInfo {
+    /// Where it sits in the clip's footage (what the engine keys on).
+    pub media_time: i64,
+    /// Where that is on the sequence.
+    pub time: i64,
+    /// "linear", "bezier", "autoBezier", "continuousBezier", "hold", "easeIn" or "easeOut".
+    pub interpolation: String,
+}
+
+/// One parameter in Effect Controls, with its value at the playhead.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ParamInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: ParamType,
+    pub value: Vec<f64>,
+    pub min: f64,
+    pub max: f64,
+    /// The slider's usual range (typed values may go past it, up to `min`/`max`).
+    pub soft_min: f64,
+    pub soft_max: f64,
+    pub unit: String,
+    pub decimals: u8,
+    pub choices: Vec<String>,
+    /// The stopwatch is offered.
+    pub animatable: bool,
+    /// The stopwatch is on: the value comes from keyframes.
+    pub animated: bool,
+    pub keyframes: Vec<KeyframeInfo>,
+}
+
+/// One effect in Effect Controls.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EffectInfo {
+    /// The clip it is on (Volume sits on a video clip's linked audio).
+    pub clip: u64,
+    /// Its place among that clip's effects (what the edits name).
+    pub index: u32,
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    /// Motion, Opacity, Time Remapping, Volume…: on every clip, never removed.
+    pub fixed: bool,
+    pub params: Vec<ParamInfo>,
+}
+
+fn interp_name(i: filmcraft_project::Interpolation) -> &'static str {
+    use filmcraft_project::Interpolation as I;
+    match i {
+        I::Linear => "linear",
+        I::Hold => "hold",
+        I::Bezier => "bezier",
+        I::AutoBezier => "autoBezier",
+        I::ContinuousBezier => "continuousBezier",
+        I::EaseIn => "easeIn",
+        I::EaseOut => "easeOut",
+    }
+}
+
+/// Sequence time of media time `mt` in clip `c` (the inverse of `source_time_at`).
+fn sequence_time_of(c: &TrackItem, mt: Tick) -> i64 {
+    let speed = if c.speed.abs() > 1e-9 { c.speed.abs() } else { 1.0 };
+    let rel = if c.reverse {
+        let full = (c.duration.0 as f64 * speed).round();
+        (full - 1.0 - (mt.0 - c.source_in.0) as f64) / speed
+    } else {
+        (mt.0 - c.source_in.0) as f64 / speed
+    };
+    c.start.0 + rel.round() as i64
+}
+
+fn values_of(v: &filmcraft_project::ParamValue) -> Vec<f64> {
+    use filmcraft_project::ParamValue as V;
+    match v {
+        V::Float(x) => vec![*x],
+        V::Vec2(p) => vec![p.x, p.y],
+        V::Color(c) => c.iter().map(|x| f64::from(*x)).collect(),
+        V::Bool(b) => vec![if *b { 1.0 } else { 0.0 }],
+        V::Choice(i) => vec![f64::from(*i)],
+        _ => Vec::new(),
+    }
+}
+
+fn effects_of(c: &TrackItem, at: Tick) -> Vec<EffectInfo> {
+    use filmcraft_project::ParamKind as K;
+    let mt = c.effect_time_at(at.clamp(c.start, (c.end() - Tick(1)).max(c.start)));
+    c.effects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let def = e.def()?;
+            // graphic layers are edited with the text tools
+            if filmcraft_project::graphic::is_layer_id(def.id) {
+                return None;
+            }
+            let params = def
+                .params
+                .iter()
+                .map(|d| {
+                    let prm = e.param(d.id);
+                    let value = prm.map(|p| p.value_at(mt)).unwrap_or_else(|| d.default.clone());
+                    let (kind, min, max, soft_min, soft_max, unit, decimals, choices) = match &d.kind {
+                        K::Float { min, max, soft_min, soft_max, unit, decimals } => {
+                            (ParamType::Number, *min, *max, *soft_min, *soft_max, (*unit).to_string(), *decimals, vec![])
+                        }
+                        K::Point => (ParamType::Point, f64::MIN, f64::MAX, 0.0, 0.0, String::new(), 1, vec![]),
+                        K::Angle => (ParamType::Angle, -36_000.0, 36_000.0, -180.0, 180.0, "°".into(), 1, vec![]),
+                        K::Bool => (ParamType::Toggle, 0.0, 1.0, 0.0, 1.0, String::new(), 0, vec![]),
+                        K::Choice(opts) => (
+                            ParamType::Choice,
+                            0.0,
+                            opts.len().saturating_sub(1) as f64,
+                            0.0,
+                            0.0,
+                            String::new(),
+                            0,
+                            opts.iter().map(|o| (*o).to_string()).collect(),
+                        ),
+                        K::Color => (ParamType::Colour, 0.0, 1.0, 0.0, 1.0, String::new(), 2, vec![]),
+                        _ => (ParamType::Other, 0.0, 0.0, 0.0, 0.0, String::new(), 0, vec![]),
+                    };
+                    let keyframes = prm
+                        .map(|p| {
+                            p.keyframes
+                                .iter()
+                                .map(|k| KeyframeInfo {
+                                    media_time: k.time.0,
+                                    time: sequence_time_of(c, k.time),
+                                    interpolation: interp_name(k.interp).to_string(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    ParamInfo {
+                        id: d.id.to_string(),
+                        name: d.label.to_string(),
+                        kind,
+                        value: values_of(&value),
+                        min,
+                        max,
+                        soft_min,
+                        soft_max,
+                        unit,
+                        decimals,
+                        choices,
+                        animatable: d.animatable && kind != ParamType::Other,
+                        animated: prm.is_some_and(filmcraft_project::Param::is_animated),
+                        keyframes,
+                    }
+                })
+                .collect();
+            Some(EffectInfo {
+                clip: c.id.0,
+                index: u32::try_from(i).unwrap_or(u32::MAX),
+                id: def.id.to_string(),
+                name: def.name.to_string(),
+                enabled: e.enabled,
+                fixed: def.intrinsic,
+                params,
+            })
+        })
+        .collect()
+}
+
+/// Effect Controls for a clip: its effects (a video clip's linked sound's after them, Volume
+/// among them) with every parameter's value at the playhead and its keyframes.
+pub(crate) fn effect_controls(s: &Session, clip: u64) -> Result<Vec<EffectInfo>, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let f = model::find(seq, ClipId(clip)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?;
+    let at = s.playhead();
+    let mut out = effects_of(f.clip, at);
+    if f.kind == TrackKind::Video
+        && let Some(a) = model::partner(seq, f.clip, TrackKind::Audio)
+    {
+        out.extend(effects_of(a.clip, at));
+    }
+    Ok(out)
+}
+
+/// The JSON value the engine takes for a parameter of `kind`.
+fn param_json(kind: Option<&filmcraft_project::ParamKind>, value: &[f64]) -> Result<serde_json::Value, MobileError> {
+    use filmcraft_project::ParamKind as K;
+    let first = || value.first().copied().ok_or_else(|| MobileError::Command("A value is missing.".into()));
+    Ok(match kind {
+        Some(K::Point) => {
+            let (x, y) = (first()?, value.get(1).copied().ok_or_else(|| MobileError::Command("A point needs x and y.".into()))?);
+            json!([x, y])
+        }
+        Some(K::Bool) => json!(first()? >= 0.5),
+        Some(K::Choice(_)) => json!(first()?.round().max(0.0) as u64),
+        Some(K::Color) => {
+            let c: Vec<f64> = (0..4).map(|i| value.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0)).collect();
+            json!(c)
+        }
+        _ => json!(first()?),
+    })
+}
+
+fn param_kind(s: &Session, clip: u64, effect: u32, param: &str) -> Option<filmcraft_project::ParamKind> {
+    let (_, seq) = model::sequence(s).ok()?;
+    let f = model::find(seq, ClipId(clip))?;
+    let e = f.clip.effects.get(effect as usize)?;
+    Some(e.def()?.param(param)?.kind.clone())
+}
+
+/// Set a parameter at the playhead (a keyframe there when its stopwatch is on); `merge` makes a
+/// drag one undo step, `begin` starts a new one (the first change of a drag).
+pub(crate) fn set_param(s: &mut Session, clip: u64, effect: u32, param: &str, value: &[f64], merge: bool, begin: bool) -> Result<(), MobileError> {
+    let kind = param_kind(s, clip, effect, param);
+    let v = param_json(kind.as_ref(), value)?;
+    ex(s, "effects.setParam", json!({"clip": clip, "effect": effect, "param": param, "value": v, "merge": merge, "begin": begin}))?;
+    Ok(())
+}
+
+/// The stopwatch: start animating (a first keyframe at the playhead) or stop (keyframes go, the
+/// value at the playhead stays).
+pub(crate) fn toggle_animation(s: &mut Session, clip: u64, effect: u32, param: &str) -> Result<(), MobileError> {
+    ex(s, "effects.toggleAnimation", json!({"clip": clip, "effect": effect, "param": param}))?;
+    Ok(())
+}
+
+/// Add/Remove Keyframe at the playhead.
+pub(crate) fn toggle_keyframe(s: &mut Session, clip: u64, effect: u32, param: &str) -> Result<(), MobileError> {
+    ex(s, "effects.addKeyframe", json!({"clip": clip, "effect": effect, "param": param}))?;
+    Ok(())
+}
+
+pub(crate) fn delete_keyframe(s: &mut Session, clip: u64, effect: u32, param: &str, media_time: i64) -> Result<(), MobileError> {
+    ex(s, "effects.deleteKeyframe", json!({"clip": clip, "effect": effect, "param": param, "mediaTime": media_time}))?;
+    Ok(())
+}
+
+/// Move a keyframe to another place in the footage; `merge` makes a drag one undo step.
+pub(crate) fn move_keyframe(s: &mut Session, clip: u64, effect: u32, param: &str, media_time: i64, to: i64, merge: bool) -> Result<(), MobileError> {
+    ex(s, "effects.moveKeyframe", json!({"clip": clip, "effect": effect, "param": param, "mediaTime": media_time, "to": to.max(0), "merge": merge}))?;
+    Ok(())
+}
+
+/// The interpolation leaving a keyframe: "linear", "bezier", "hold" (or "autoBezier",
+/// "continuousBezier", "easeIn", "easeOut").
+pub(crate) fn set_interpolation(s: &mut Session, clip: u64, effect: u32, param: &str, media_time: i64, interpolation: &str) -> Result<(), MobileError> {
+    ex(s, "effects.setInterpolation", json!({"clip": clip, "effect": effect, "param": param, "mediaTime": media_time, "interpolation": interpolation}))?;
+    Ok(())
+}
+
+pub(crate) fn reset_param(s: &mut Session, clip: u64, effect: u32, param: &str) -> Result<(), MobileError> {
+    ex(s, "effects.resetParam", json!({"clip": clip, "effect": effect, "param": param}))?;
+    Ok(())
+}
+
+/// The fx switch: turn an effect off or on.
+pub(crate) fn toggle_effect(s: &mut Session, clip: u64, effect: u32) -> Result<(), MobileError> {
+    ex(s, "effects.toggleEnabled", json!({"clip": clip, "index": effect}))?;
+    Ok(())
+}
+
+/// Remove an applied effect (Motion, Opacity and the other fixed ones stay).
+pub(crate) fn remove_effect(s: &mut Session, clip: u64, effect: u32) -> Result<(), MobileError> {
+    ex(s, "effects.remove", json!({"clip": clip, "index": effect}))?;
+    Ok(())
+}
+
+/// Where a clip's keyframes are on the sequence (every animated parameter's, once each), for
+/// the marks on the timeline.
+pub(crate) fn keyframe_times(c: &TrackItem) -> Vec<i64> {
+    let mut t: Vec<i64> = c
+        .effects
+        .iter()
+        .flat_map(|e| e.params.values())
+        .flat_map(|p| p.keyframes.iter())
+        .map(|k| sequence_time_of(c, k.time))
+        .filter(|t| *t >= c.start.0 && *t <= c.end().0)
+        .collect();
+    t.sort_unstable();
+    t.dedup();
+    t
 }

@@ -251,5 +251,27 @@ object ProGlyphs {
         ln(c, 7f, 10f, 13f, 10f)
         ln(c, 10f, 7f, 10f, 13f)
     }
+
+    /** The stopwatch: a parameter's keyframing switch. */
+    val Stopwatch = Glyph.Drawn { c ->
+        drawCircle(c, u(7.5f), Offset(u(12f), u(13.5f)), style = stroke())
+        ln(c, 12f, 13.5f, 12f, 9.5f)
+        ln(c, 12f, 13.5f, 14.8f, 15f)
+        ln(c, 10f, 3f, 14f, 3f)
+        ln(c, 12f, 3f, 12f, 6f)
+        ln(c, 18.5f, 6.5f, 19.8f, 5.2f)
+    }
+
+    /** A keyframe: a diamond. */
+    val Keyframe = Glyph.Drawn { c ->
+        val p = Path().apply {
+            moveTo(u(12f), u(4f))
+            lineTo(u(20f), u(12f))
+            lineTo(u(12f), u(20f))
+            lineTo(u(4f), u(12f))
+            close()
+        }
+        drawPath(p, c, style = stroke())
+    }
 }
 
