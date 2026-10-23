@@ -6,6 +6,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -18,6 +19,9 @@ import io.github.artcraftandroid.filmcraft.core.ClipInfo
 import io.github.artcraftandroid.filmcraft.core.ClipKind
 import io.github.artcraftandroid.filmcraft.core.LaneKind
 import io.github.artcraftandroid.filmcraft.core.MobileSession
+import io.github.artcraftandroid.filmcraft.core.ProClip
+import io.github.artcraftandroid.filmcraft.core.ProTimeline
+import io.github.artcraftandroid.filmcraft.core.TrackSwitches
 import io.github.artcraftandroid.filmcraft.core.Renderer
 import io.github.artcraftandroid.filmcraft.core.SessionStatus
 import io.github.artcraftandroid.filmcraft.core.SpeechAudio
@@ -39,6 +43,12 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Pro mode's track heights (dp): the smallest still has 44 dp touch targets. */
+const val PRO_TRACK_MIN = 44
+const val PRO_TRACK_MAX = 160
+const val PRO_VIDEO_TRACK = 56
+const val PRO_AUDIO_TRACK = 48
 
 /** A tool's panel. */
 sealed interface Panel {
@@ -89,6 +99,7 @@ class EditorController(
     private val projects: Projects,
     private val scope: CoroutineScope,
     private val host: EditorHost,
+    proDefault: Boolean = false,
 ) {
     private val session: MobileSession get() = engine.session
 
@@ -121,6 +132,21 @@ class EditorController(
     var typing by mutableStateOf("")
     /** A clip is being dragged or trimmed: tools wait. */
     var gesture by mutableStateOf(false)
+
+    /** The desktop-style editor ([ProEditor]) instead of the phone one; remembered per project. */
+    var proMode by mutableStateOf(project.proMode ?: proDefault)
+        private set
+    /** The timeline as Pro mode shows it (read only while Pro mode is on). */
+    var pro by mutableStateOf<ProTimeline?>(null)
+        private set
+    /** Pro mode's track heights (dp) by track, as the user resized them. */
+    val trackHeights = mutableStateMapOf<ULong, Int>().apply { putAll(project.trackHeights) }
+    /** Pro mode's timeline view: zoom (0 until laid out) and the time at its left edge. */
+    var proPxPerSecond by mutableFloatStateOf(0f)
+    var proScroll by mutableLongStateOf(0L)
+    /** Pro mode's panel sizes (px) as the user dragged them, else 0 (the layout's defaults). */
+    var proMonitorHeight by mutableFloatStateOf(0f)
+    var proSideWidth by mutableFloatStateOf(0f)
 
     val media = MediaCache(engine, scope)
     private var renderer: Renderer? = null
@@ -189,6 +215,7 @@ class EditorController(
         }
         timeline = t
         playhead = t.playhead
+        if (proMode) refreshPro()
         refreshStatus()
         newRenderer()
         if (fresh) save()
@@ -211,6 +238,7 @@ class EditorController(
         val t = runCatching { engine.command { timeline() } }.getOrNull() ?: return
         val changed = t.revision != timeline?.revision
         timeline = t
+        if (proMode) refreshPro()
         // an edit that shortens the video past the playhead brings it back to the end
         playhead = if (t.playhead > t.duration) engine.command { setPlayhead(t.duration) } else t.playhead
         refreshStatus()
@@ -219,6 +247,10 @@ class EditorController(
             scheduleSave()
         }
         requestFrame(playhead, draft = false)
+    }
+
+    private suspend fun refreshPro() {
+        pro = runCatching { engine.command { proTimeline() } }.getOrNull()
     }
 
     private fun scheduleSave() {
@@ -701,6 +733,81 @@ class EditorController(
     fun discardTakes(ids: List<ULong>) = edit { ids.forEach { runCatching { deleteClip(it) } } }
 
     fun closeEditor() = host.close()
+
+    // ---- Pro mode ----
+
+    /** Switch between the phone editor and Pro mode; the project remembers it. */
+    fun switchProMode(on: Boolean) {
+        if (on == proMode) return
+        stop()
+        panel = null
+        submenu = Submenu.None
+        proMode = on
+        rememberView()
+        scope.launch {
+            if (on) refreshPro()
+            refresh()
+        }
+    }
+
+    /** Keep the project's Pro mode and track heights in its listing. */
+    private fun rememberView() {
+        val p = project.copy(proMode = proMode, trackHeights = trackHeights.toMap())
+        project = p
+        scope.launch(Dispatchers.IO) { projects.write(p) }
+    }
+
+    private var heightsJob: Job? = null
+
+    /** Resize a Pro track (dp); remembered with the project. */
+    fun setTrackHeight(track: ULong, dp: Int) {
+        trackHeights[track] = dp.coerceIn(PRO_TRACK_MIN, PRO_TRACK_MAX)
+        heightsJob?.cancel()
+        heightsJob = scope.launch {
+            delay(300)
+            rememberView()
+        }
+    }
+
+    val proSelection: List<ProClip> get() = pro?.clips?.filter { it.selected }.orEmpty()
+
+    /** Select a clip (with its linked partners while Linked Selection is on), nothing for none; [add] toggles it. */
+    fun proSelect(clip: ULong?, add: Boolean = false) {
+        submenu = Submenu.None
+        selectedCaption = null
+        quickEdit { selectClips(listOfNotNull(clip), add && clip != null) }
+    }
+
+    fun proMove(clip: ULong, track: ULong, start: Long) = edit { proMoveClip(clip, track, start) }
+    fun deleteSelection(ripple: Boolean) = edit { deleteSelection(ripple) }
+
+    fun addTracks(video: Int, audio: Int) = edit { addTracks(video.toUInt(), audio.toUInt()) }
+    fun deleteTrack(track: ULong) = edit { deleteTrack(track) }
+    fun setTrack(track: ULong, switches: TrackSwitches) = edit { setTrack(track, switches) }
+    fun setTargeted(track: ULong, on: Boolean) = quickEdit { setTrackTargeted(track, on) }
+    fun setSourcePatch(track: ULong, on: Boolean) = quickEdit { setSourcePatch(track, on) }
+    fun setSnapping(on: Boolean) = quickEdit { setSnapping(on) }
+    fun setLinkedSelection(on: Boolean) = quickEdit { setLinkedSelection(on) }
+
+    fun markIn(at: Long = playhead) = edit { setMarkIn(at) }
+    fun markOut(at: Long = playhead) = edit { setMarkOut(at) }
+    fun clearIn() = edit { setMarkIn(null) }
+    fun clearOut() = edit { setMarkOut(null) }
+    fun clearInOut() = edit { clearInOut() }
+    fun goToIn() = pro?.markIn?.let { seek(it, draft = false) }
+    fun goToOut() = pro?.markOut?.let { seek(it, draft = false) }
+
+    fun addMarker(at: Long = playhead) = edit { addMarker(at, "") }
+    fun editMarker(id: ULong, name: String, comment: String, color: String) = edit { editMarker(id, name, comment, color) }
+    fun deleteMarker(id: ULong) = edit { deleteMarker(id) }
+
+    fun goToMarker(next: Boolean) {
+        stop()
+        scope.launch {
+            val t = runCatching { engine.command { goToMarker(next) } }.getOrNull() ?: return@launch
+            seek(t, draft = false)
+        }
+    }
 
     // ---- export ----
 

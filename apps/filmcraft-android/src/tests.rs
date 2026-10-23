@@ -1017,3 +1017,180 @@ fn a_transition_on_a_cut_without_spare_footage_shortens_the_video_by_its_length(
     m.undo();
     assert_eq!(m.timeline().unwrap().duration, before);
 }
+
+// ---- Pro mode ----
+
+fn pro_track<'a>(t: &'a pro::ProTimeline, code: &str) -> &'a pro::ProTrack {
+    t.video_tracks.iter().chain(&t.audio_tracks).find(|x| x.code == code).unwrap()
+}
+
+#[test]
+fn the_pro_timeline_shows_every_track_and_the_linked_audio_as_clips() {
+    let (m, _d, ids) = two_clips();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.video_tracks.iter().map(|x| x.code.as_str()).collect::<Vec<_>>(), ["V1"]);
+    assert_eq!(t.audio_tracks.iter().map(|x| x.code.as_str()).collect::<Vec<_>>(), ["A1"]);
+    let v1 = pro_track(&t, "V1").id;
+    let a1 = pro_track(&t, "A1").id;
+    let video: Vec<_> = t.clips.iter().filter(|c| c.track == v1).collect();
+    let audio: Vec<_> = t.clips.iter().filter(|c| c.track == a1).collect();
+    assert_eq!(video.iter().map(|c| c.id).collect::<Vec<_>>(), ids);
+    assert_eq!(audio.len(), 2, "each video clip's sound is a clip of its own on A1");
+    assert!(video.iter().zip(&audio).all(|(v, a)| v.link.is_some() && v.link == a.link && v.start == a.start));
+    assert!(audio.iter().all(|c| c.kind == ClipKind::Audio));
+    // new tracks: all targeted, V1 and A1 patched, switches off but sync lock and output
+    for x in t.video_tracks.iter().chain(&t.audio_tracks) {
+        assert!(x.targeted && x.source_patched && x.sync_lock && x.output);
+        assert!(!x.locked && !x.muted && !x.solo);
+    }
+    assert!(t.snapping && t.linked_selection);
+    assert_eq!((t.mark_in, t.mark_out), (None, None));
+    // the simple editor sees the same project unchanged
+    assert_eq!(main_clips(&m).iter().map(|c| c.id).collect::<Vec<_>>(), ids);
+}
+
+#[test]
+fn tracks_are_added_and_deleted_as_undo_steps_and_one_of_each_kind_stays() {
+    let (m, _d, _) = two_clips();
+    m.add_tracks(2, 1).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.video_tracks.iter().map(|x| x.code.as_str()).collect::<Vec<_>>(), ["V1", "V2", "V3"]);
+    assert_eq!(t.audio_tracks.iter().map(|x| x.code.as_str()).collect::<Vec<_>>(), ["A1", "A2"]);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Add Tracks"));
+    m.delete_track(pro_track(&t, "V2").id).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.video_tracks.len(), 2);
+    assert_eq!(t.video_tracks[1].code, "V2", "the tracks above move down and are renumbered");
+    m.undo();
+    assert_eq!(m.pro_timeline().unwrap().video_tracks.len(), 3);
+    // deleting a track with clips takes them along; the last track of a kind stays
+    m.delete_track(pro_track(&t, "A2").id).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert!(matches!(m.delete_track(pro_track(&t, "A1").id), Err(MobileError::Command(_))));
+    m.add_tracks(0, 0).unwrap();
+}
+
+#[test]
+fn track_switches_are_one_undo_step_and_targeting_patches_the_source() {
+    let (m, _d, _) = two_clips();
+    m.add_tracks(1, 1).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let (v1, v2, a1, a2) = (pro_track(&t, "V1").id, pro_track(&t, "V2").id, pro_track(&t, "A1").id, pro_track(&t, "A2").id);
+    m.set_track(v1, pro::TrackSwitches { locked: Some(true), output: Some(false), ..Default::default() }).unwrap();
+    m.set_track(a1, pro::TrackSwitches { muted: Some(true), solo: Some(true), sync_lock: Some(false), name: Some("Dialogue".into()), ..Default::default() })
+        .unwrap();
+    let t = m.pro_timeline().unwrap();
+    let (x, y) = (pro_track(&t, "V1"), pro_track(&t, "A1"));
+    assert!(x.locked && !x.output);
+    assert!(y.muted && y.solo && !y.sync_lock);
+    assert_eq!(y.name, "Dialogue");
+    m.undo();
+    let y = m.pro_timeline().unwrap().audio_tracks[0].clone();
+    assert!(!y.muted && !y.solo && y.sync_lock, "the audio switches went back in one step");
+    assert!(m.pro_timeline().unwrap().video_tracks[0].locked, "the earlier step stays");
+    assert!(matches!(m.set_track(a1, pro::TrackSwitches { name: Some("  ".into()), ..Default::default() }), Err(MobileError::Command(_))));
+    // targeting and source patching
+    m.set_track_targeted(v2, false).unwrap();
+    m.set_source_patch(v2, true).unwrap();
+    m.set_source_patch(a2, true).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert!(!pro_track(&t, "V2").targeted && pro_track(&t, "V2").source_patched && !pro_track(&t, "V1").source_patched);
+    assert!(pro_track(&t, "A2").source_patched && !pro_track(&t, "A1").source_patched);
+    m.set_source_patch(a2, false).unwrap();
+    assert!(m.pro_timeline().unwrap().audio_tracks.iter().all(|x| !x.source_patched));
+}
+
+#[test]
+fn snapping_linked_selection_and_selecting_clips() {
+    let (m, _d, ids) = two_clips();
+    assert!(!m.set_snapping(false).unwrap());
+    assert!(!m.pro_timeline().unwrap().snapping);
+    // with Linked Selection on, selecting the picture selects its sound
+    m.select_clips(vec![ids[0]], false).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.clips.iter().filter(|c| c.selected).count(), 2);
+    assert!(!m.set_linked_selection(false).unwrap());
+    m.select_clips(vec![ids[1]], false).unwrap();
+    let sel: Vec<u64> = m.pro_timeline().unwrap().clips.iter().filter(|c| c.selected).map(|c| c.id).collect();
+    assert_eq!(sel, vec![ids[1]]);
+    // add toggles a clip in and out
+    m.select_clips(vec![ids[0]], true).unwrap();
+    assert_eq!(m.pro_timeline().unwrap().clips.iter().filter(|c| c.selected).count(), 2);
+    m.select_clips(vec![ids[0]], true).unwrap();
+    assert_eq!(m.pro_timeline().unwrap().clips.iter().filter(|c| c.selected).count(), 1);
+}
+
+#[test]
+fn in_out_points_and_markers_round_trip_and_undo() {
+    let (m, _d, _) = two_clips();
+    m.set_mark_in(Some(SEC)).unwrap();
+    m.set_mark_out(Some(3 * SEC)).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!((t.mark_in, t.mark_out), (Some(SEC), Some(3 * SEC)));
+    m.set_mark_in(None).unwrap();
+    assert_eq!(m.pro_timeline().unwrap().mark_in, None);
+    m.undo();
+    assert_eq!(m.pro_timeline().unwrap().mark_in, Some(SEC));
+    m.clear_in_out().unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!((t.mark_in, t.mark_out), (None, None));
+
+    let a = m.add_marker(2 * SEC, "Chorus".into()).unwrap();
+    let b = m.add_marker(SEC / 2, String::new()).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.markers.iter().map(|x| x.id).collect::<Vec<_>>(), vec![b, a], "in time order");
+    assert_eq!((t.markers[1].name.as_str(), t.markers[1].color.as_str()), ("Chorus", "Green"));
+    assert_eq!(marker_colors().len(), 16);
+    let colour = marker_colors()[0].clone();
+    m.edit_marker(a, "Bridge".into(), "louder".into(), colour.clone()).unwrap();
+    let mk = m.pro_timeline().unwrap().markers.into_iter().find(|x| x.id == a).unwrap();
+    assert_eq!((mk.name.as_str(), mk.comment.as_str(), mk.color.as_str()), ("Bridge", "louder", colour.as_str()));
+    m.set_playhead(0);
+    assert_eq!(m.go_to_marker(true).unwrap(), SEC / 2);
+    assert_eq!(m.go_to_marker(true).unwrap(), 2 * SEC);
+    assert_eq!(m.go_to_marker(false).unwrap(), SEC / 2);
+    m.delete_marker(b).unwrap();
+    assert_eq!(m.pro_timeline().unwrap().markers.len(), 1);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Clear Marker"));
+    m.undo();
+    assert_eq!(m.pro_timeline().unwrap().markers.len(), 2);
+    assert!(matches!(m.delete_marker(999_999), Err(MobileError::Command(_))));
+}
+
+#[test]
+fn a_pro_move_takes_the_sound_along_and_refuses_locked_or_wrong_tracks() {
+    let (m, _d, ids) = two_clips();
+    m.add_tracks(1, 1).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let (v2, a2) = (pro_track(&t, "V2").id, pro_track(&t, "A2").id);
+    m.pro_move_clip(ids[1], v2, 6 * SEC).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let moved = t.clips.iter().find(|c| c.id == ids[1]).unwrap();
+    assert_eq!((moved.track, moved.start), (v2, 6 * SEC));
+    let sound = t.clips.iter().find(|c| c.id != moved.id && c.link == moved.link).unwrap();
+    assert_eq!(sound.start, 6 * SEC, "the linked sound follows by the same offset");
+    m.undo();
+    assert_eq!(m.pro_timeline().unwrap().clips.iter().find(|c| c.id == ids[1]).unwrap().start, 2 * SEC);
+    assert!(matches!(m.pro_move_clip(ids[0], a2, 0), Err(MobileError::Command(_))), "a video clip can't go on an audio track");
+    m.set_track(v2, pro::TrackSwitches { locked: Some(true), ..Default::default() }).unwrap();
+    assert!(matches!(m.pro_move_clip(ids[0], v2, 0), Err(MobileError::Command(_))));
+}
+
+#[test]
+fn clear_leaves_a_gap_and_ripple_delete_closes_it() {
+    let (m, _d, ids) = two_clips();
+    m.select_clips(vec![ids[0]], false).unwrap();
+    m.delete_selection(false).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let v1 = t.video_tracks[0].id;
+    let left: Vec<_> = t.clips.iter().filter(|c| c.track == v1).collect();
+    assert_eq!((left.len(), left[0].id, left[0].start), (1, ids[1], 2 * SEC), "Clear leaves the gap");
+    assert_eq!(t.clips.len(), 2, "and takes the linked sound along");
+    m.undo();
+    m.select_clips(vec![ids[0]], false).unwrap();
+    m.delete_selection(true).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.clips.iter().find(|c| c.id == ids[1]).unwrap().start, 0, "Ripple Delete closes it");
+    m.select_clips(vec![], false).unwrap();
+    assert!(matches!(m.delete_selection(true), Err(MobileError::Command(_))));
+}

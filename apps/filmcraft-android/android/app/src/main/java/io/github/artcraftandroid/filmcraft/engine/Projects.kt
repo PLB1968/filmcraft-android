@@ -25,6 +25,10 @@ data class ProjectEntry(
     val width: Int,
     val height: Int,
     val dir: File,
+    /** The editor opens in Pro mode (null: never chosen, so Settings' default applies). */
+    val proMode: Boolean? = null,
+    /** Pro mode's track heights (dp) by engine track id; tracks not listed have the default. */
+    val trackHeights: Map<ULong, Int> = emptyMap(),
 ) {
     val projectFile: File get() = File(dir, PROJECT_FILE)
     val poster: File get() = File(dir, POSTER_FILE)
@@ -67,6 +71,10 @@ class Projects(private val context: Context) {
                 width = j.optInt("width", 1080),
                 height = j.optInt("height", 1920),
                 dir = dir,
+                proMode = if (j.has("proMode")) j.optBoolean("proMode") else null,
+                trackHeights = j.optJSONObject("trackHeights")?.let { h ->
+                    h.keys().asSequence().mapNotNull { k -> k.toULongOrNull()?.let { it to h.optInt(k) } }.filter { it.second > 0 }.toMap()
+                }.orEmpty(),
             )
         }.getOrNull()
     }
@@ -80,6 +88,8 @@ class Projects(private val context: Context) {
             .put("duration", p.duration)
             .put("width", p.width)
             .put("height", p.height)
+        p.proMode?.let { j.put("proMode", it) }
+        if (p.trackHeights.isNotEmpty()) j.put("trackHeights", JSONObject().apply { for ((k, v) in p.trackHeights) put(k.toString(), v) })
         val f = File(p.dir, ProjectEntry.META_FILE)
         val tmp = File(p.dir, ProjectEntry.META_FILE + ".tmp")
         tmp.writeText(j.toString())

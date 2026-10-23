@@ -4,12 +4,18 @@
 # becomes the latest release (betas too: while the app is in beta, every release is one).
 #
 # A manual run (Actions › Release › Run workflow) is a dry run: it builds the APK at the version in
-# gradle.properties and keeps it as the run's artifact, and releases nothing.
+# gradle.properties and keeps it as the run's artifact, and releases nothing. So is every push to
+# main and every pull request into it: the APK is the run's artifact (Actions › the run ›
+# Artifacts), never a release, and a pull request shows whether the app still builds before it is
+# merged.
 name: Release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
