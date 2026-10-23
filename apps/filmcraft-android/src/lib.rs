@@ -738,6 +738,46 @@ impl MobileSession {
         self.main_edit(|s| pro::delete_selection(s, ripple))
     }
 
+    // ---- Pro mode: the tools ----
+
+    /// Trim a clip's head or tail by `delta` (`ripple`: Ripple Edit); returns the change made.
+    pub fn trim_edge(&self, clip: u64, head: bool, delta: i64, ripple: bool) -> Result<i64, MobileError> {
+        self.main_edit(|s| pro::trim_edge(s, clip, head, delta, ripple))
+    }
+
+    /// Rolling Edit: move the cut between `left` and `right`; returns the change made.
+    pub fn roll_edit(&self, left: u64, right: u64, delta: i64) -> Result<i64, MobileError> {
+        self.main_edit(|s| pro::roll(s, left, right, delta))
+    }
+
+    pub fn slip_clip(&self, clip: u64, delta: i64) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::slip(s, clip, delta))
+    }
+
+    pub fn slide_clip(&self, clip: u64, delta: i64) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::slide(s, clip, delta))
+    }
+
+    /// Rate Stretch a clip's head or tail by `delta`; returns its new speed.
+    pub fn rate_stretch(&self, clip: u64, head: bool, delta: i64) -> Result<f64, MobileError> {
+        self.main_edit(|s| pro::rate_stretch(s, clip, head, delta))
+    }
+
+    /// Razor at `time`: one clip (and its partners), one track, or every track.
+    pub fn razor(&self, time: i64, clip: Option<u64>, track: Option<u64>) -> Result<u32, MobileError> {
+        self.main_edit(|s| pro::razor(s, time, clip, track))
+    }
+
+    /// Track Select Forward from `time` on `track` (every track when empty).
+    pub fn select_forward(&self, track: Option<u64>, time: i64) -> Result<u32, MobileError> {
+        pro::select_forward(&mut self.lock(), track, time)
+    }
+
+    /// Move clips together by `delta`, each on its own track (one undo step).
+    pub fn shift_clips(&self, clips: Vec<u64>, delta: i64) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::shift_clips(s, &clips, delta))
+    }
+
     // ---- export ----
 
     pub fn export_plan(&self, settings: ExportSettings) -> Result<ExportPlan, MobileError> {

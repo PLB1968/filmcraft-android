@@ -33,12 +33,14 @@ import io.github.artcraftandroid.filmcraft.engine.Engine
 import io.github.artcraftandroid.filmcraft.engine.ProjectEntry
 import io.github.artcraftandroid.filmcraft.engine.Projects
 import io.github.artcraftandroid.filmcraft.engine.intoBitmap
+import io.github.artcraftandroid.filmcraft.engine.toBitmap
 import io.github.artcraftandroid.filmcraft.engine.userMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -49,6 +51,27 @@ const val PRO_TRACK_MIN = 44
 const val PRO_TRACK_MAX = 160
 const val PRO_VIDEO_TRACK = 56
 const val PRO_AUDIO_TRACK = 48
+
+/** Pro mode's tools, with their desktop shortcut keys. */
+enum class ProTool(val label: String, val key: Char) {
+    Selection("Selection", 'V'),
+    TrackSelectForward("Track Select Forward", 'A'),
+    RippleEdit("Ripple Edit", 'B'),
+    RollingEdit("Rolling Edit", 'N'),
+    RateStretch("Rate Stretch", 'R'),
+    Razor("Razor", 'C'),
+    Slip("Slip", 'Y'),
+    Slide("Slide", 'U'),
+    Hand("Hand", 'H'),
+    Zoom("Zoom", 'Z'),
+    Type("Type", 'T'),
+}
+
+/** A frame the Program monitor shows during a trim: project item [item] (null: no picture) at media time [time]. */
+data class TrimFrame(val item: ULong?, val time: Long, val label: String)
+
+/** The Program monitor during a trim: one frame, or two side by side (roll, slip, slide). */
+data class TrimView(val frames: List<TrimFrame>, val caption: String)
 
 /** A tool's panel. */
 sealed interface Panel {
@@ -169,6 +192,7 @@ class EditorController(
 
     init {
         scope.launch { renderFrames() }
+        scope.launch { renderTrims() }
     }
 
     // ---- reading ----
@@ -807,6 +831,111 @@ class EditorController(
             val t = runCatching { engine.command { goToMarker(next) } }.getOrNull() ?: return@launch
             seek(t, draft = false)
         }
+    }
+
+    // ---- Pro mode: the tools ----
+
+    var proTool by mutableStateOf(ProTool.Selection)
+
+    /** What the Program monitor shows while a trim, roll, slip or slide is dragged (null: the program). */
+    var trimView by mutableStateOf<TrimView?>(null)
+        private set
+    /** [trimView]'s pictures, in its order (null while one is drawn, or for sound). */
+    var trimPictures by mutableStateOf<List<ImageBitmap?>>(emptyList())
+        private set
+    private val trimRequests = MutableStateFlow<TrimView?>(null)
+
+    /** Show [v] in the Program monitor (null: back to the program). */
+    fun showTrim(v: TrimView?) {
+        if (v == trimView) return
+        if (v == null || v.frames.size != trimView?.frames?.size) trimPictures = List(v?.frames?.size ?: 0) { null }
+        trimView = v
+        trimRequests.value = v
+    }
+
+    private suspend fun renderTrims() {
+        trimRequests.collectLatest { v ->
+            if (v == null) return@collectLatest
+            val r = renderer ?: return@collectLatest
+            val side = (previewSide * 2 / 3).coerceIn(160, 960).toUInt()
+            val pics = v.frames.map { f ->
+                if (f.item == null) null
+                else withContext(engine.preview) { runCatching { r.thumbnail(f.item, f.time.coerceAtLeast(0L), side, null).toBitmap()?.asImageBitmap() }.getOrNull() }
+            }
+            if (trimView == v) trimPictures = pics
+        }
+    }
+
+    fun proTrim(clip: ULong, head: Boolean, delta: Long, ripple: Boolean) = edit { trimEdge(clip, head, delta, ripple) }
+    fun proRoll(left: ULong, right: ULong, delta: Long) = edit { rollEdit(left, right, delta) }
+    fun proSlip(clip: ULong, delta: Long) = edit { slipClip(clip, delta) }
+    fun proSlide(clip: ULong, delta: Long) = edit { slideClip(clip, delta) }
+    fun proRateStretch(clip: ULong, head: Boolean, delta: Long) = edit { rateStretch(clip, head, delta) }
+    fun proRazor(at: Long, clip: ULong?, track: ULong?) = edit { razor(at, clip, track) }
+    fun proShift(clips: List<ULong>, delta: Long) = edit { shiftClips(clips, delta) }
+    fun proSelectForward(track: ULong?, at: Long) = quickEdit { selectForward(track, at) }
+
+    /** The Type tool asked for a new title at this time (the dialog shows while it is set). */
+    var titleAt by mutableStateOf<Long?>(null)
+
+    fun addTitle(at: Long, text: String) {
+        titleAt = null
+        if (text.isBlank()) return
+        playhead = at
+        edit {
+            setPlayhead(at)
+            addText(text)
+        }
+    }
+
+    // ---- J / K / L ----
+
+    private var reverseJob: Job? = null
+    private var reverseRate = 1
+
+    /** J: play backwards (picture only); again for faster, up to 8×. */
+    fun shuttleBack() {
+        if (reverseJob != null) {
+            reverseRate = (reverseRate * 2).coerceAtMost(8)
+            return
+        }
+        stop()
+        reverseRate = 1
+        val from = playhead
+        reverseJob = scope.launch(androidx.compose.ui.platform.AndroidUiDispatcher.Main) {
+            var last = withFrameNanos { it }
+            var t = from
+            while (isActive && t > 0L) {
+                val now = withFrameNanos { it }
+                t = (t - (now - last) / 1_000L * TPS / 1_000_000L * reverseRate).coerceAtLeast(0L)
+                last = now
+                playhead = t
+                requestFrame(t, draft = true)
+            }
+            reverseJob = null
+            engine.command { setPlayhead(playhead) }
+            requestFrame(playhead, draft = false)
+        }
+    }
+
+    /** K: stop, whichever way it plays. */
+    fun shuttleStop() {
+        reverseJob?.cancel()
+        if (reverseJob != null) {
+            reverseJob = null
+            val t = playhead
+            scope.launch {
+                engine.command { setPlayhead(t) }
+                requestFrame(t, draft = false)
+            }
+        }
+        stop()
+    }
+
+    /** L: play forwards. */
+    fun shuttleForward() {
+        if (reverseJob != null) shuttleStop()
+        if (!playing) play()
     }
 
     // ---- export ----

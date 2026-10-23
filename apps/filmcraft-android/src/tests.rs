@@ -1194,3 +1194,118 @@ fn clear_leaves_a_gap_and_ripple_delete_closes_it() {
     m.select_clips(vec![], false).unwrap();
     assert!(matches!(m.delete_selection(true), Err(MobileError::Command(_))));
 }
+
+// ---- Pro mode: the tools ----
+
+fn pclip(m: &MobileSession, id: u64) -> pro::ProClip {
+    m.pro_timeline().unwrap().clips.into_iter().find(|c| c.id == id).unwrap()
+}
+
+/// The clips on V1, in time order.
+fn v1(m: &MobileSession) -> Vec<pro::ProClip> {
+    let t = m.pro_timeline().unwrap();
+    let id = t.video_tracks[0].id;
+    let mut c: Vec<_> = t.clips.into_iter().filter(|c| c.track == id).collect();
+    c.sort_by_key(|c| c.start);
+    c
+}
+
+#[test]
+fn ripple_and_regular_trims_stop_at_the_media_and_are_undo_steps() {
+    let (m, _d, ids) = two_clips();
+    assert_eq!(pclip(&m, ids[0]).media_duration, 2 * SEC);
+    // Ripple Edit pulls the next clip along
+    assert_eq!(m.trim_edge(ids[0], false, -SEC / 2, true).unwrap(), -SEC / 2);
+    assert_eq!(pclip(&m, ids[1]).start, 3 * SEC / 2);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Ripple Trim"));
+    m.undo();
+    // the Selection tool leaves a gap
+    m.trim_edge(ids[0], false, -SEC / 2, false).unwrap();
+    assert_eq!((pclip(&m, ids[0]).duration, pclip(&m, ids[1]).start), (3 * SEC / 2, 2 * SEC));
+    // and can't go past the footage's end
+    assert_eq!(m.trim_edge(ids[0], false, SEC, false).unwrap(), SEC / 2);
+    // the linked sound followed every step
+    let t = m.pro_timeline().unwrap();
+    let a = t.clips.iter().find(|c| c.id != ids[0] && c.link == pclip(&m, ids[0]).link).unwrap();
+    assert_eq!(a.duration, 2 * SEC);
+}
+
+#[test]
+fn razor_cuts_a_clip_a_track_or_everything() {
+    let (m, _d, ids) = two_clips();
+    assert_eq!(m.razor(SEC, Some(ids[0]), None).unwrap(), 2, "the picture and its sound");
+    assert_eq!(v1(&m).len(), 3);
+    m.undo();
+    let v1_id = m.pro_timeline().unwrap().video_tracks[0].id;
+    m.razor(SEC, None, Some(v1_id)).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!((v1(&m).len(), t.clips.len()), (3, 5), "only V1 was cut");
+    m.undo();
+    m.razor(3 * SEC, None, None).unwrap();
+    assert_eq!(m.pro_timeline().unwrap().clips.len(), 6, "every track");
+}
+
+#[test]
+fn roll_slip_and_slide_move_cuts_and_footage_as_the_desktop_does() {
+    let (m, _d, ids) = two_clips();
+    m.razor(SEC, Some(ids[0]), None).unwrap();
+    let c = v1(&m);
+    let (a, b, next) = (c[0].id, c[1].id, ids[1]);
+    assert_eq!((pclip(&m, b).start, pclip(&m, b).source_in), (SEC, SEC));
+    // Rolling Edit: the cut moves, the total stays
+    assert_eq!(m.roll_edit(a, b, -SEC / 2).unwrap(), -SEC / 2);
+    assert_eq!((pclip(&m, a).duration, pclip(&m, b).start, pclip(&m, b).source_in), (SEC / 2, SEC / 2, SEC / 2));
+    assert_eq!(pclip(&m, next).start, 2 * SEC);
+    m.undo();
+    // Slip: the footage moves under the clip
+    m.slip_clip(b, -SEC / 2).unwrap();
+    let x = pclip(&m, b);
+    assert_eq!((x.start, x.duration, x.source_in), (SEC, SEC, SEC / 2));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Slip"));
+    m.undo();
+    // Slide: the clip moves, its neighbours give and take
+    m.slide_clip(b, SEC / 4).unwrap();
+    assert_eq!(pclip(&m, b).start, SEC + SEC / 4);
+    assert_eq!(pclip(&m, a).duration, SEC + SEC / 4);
+    assert_eq!(pclip(&m, next).start, 2 * SEC + SEC / 4);
+    assert_eq!(pclip(&m, b).source_in, SEC, "its footage stays");
+}
+
+#[test]
+fn rate_stretch_changes_speed_to_fit_and_track_select_forward_selects_from_there_on() {
+    let (m, _d, ids) = two_clips();
+    let speed = m.rate_stretch(ids[1], false, SEC).unwrap();
+    assert!((speed - 0.75).abs() < 1e-6, "{speed}");
+    let c = pclip(&m, ids[1]);
+    assert_eq!(c.duration, 4 * SEC);
+    assert!((c.speed - 0.75).abs() < 1e-6);
+    m.undo();
+    let v1_id = m.pro_timeline().unwrap().video_tracks[0].id;
+    assert_eq!(m.select_forward(Some(v1_id), 2 * SEC).unwrap(), 1, "the second clip only (the first ends there)");
+    let sel: Vec<u64> = m.pro_timeline().unwrap().clips.iter().filter(|c| c.selected).map(|c| c.id).collect();
+    assert!(sel.contains(&ids[1]) && !sel.contains(&ids[0]));
+    assert_eq!(m.select_forward(None, 0).unwrap(), 4, "every clip on every track");
+}
+
+#[test]
+fn clips_selected_forward_move_together_as_one_step() {
+    let (m, _d, ids) = two_clips();
+    m.razor(SEC, Some(ids[0]), None).unwrap();
+    let before: Vec<(u64, i64)> = v1(&m).iter().map(|c| (c.id, c.start)).collect();
+    let forward: Vec<u64> = before.iter().skip(1).map(|c| c.0).collect();
+    m.shift_clips(forward.clone(), SEC).unwrap();
+    let after: Vec<(u64, i64)> = v1(&m).iter().map(|c| (c.id, c.start)).collect();
+    assert_eq!(after[0], before[0], "the clip before stays");
+    for (b, a) in before.iter().skip(1).zip(after.iter().skip(1)) {
+        assert_eq!((a.0, a.1), (b.0, b.1 + SEC));
+    }
+    // their sound came along
+    let t = m.pro_timeline().unwrap();
+    let a1 = t.audio_tracks[0].id;
+    let mut sound: Vec<i64> = t.clips.iter().filter(|c| c.track == a1).map(|c| c.start).collect();
+    sound.sort_unstable();
+    assert_eq!(sound, vec![0, 2 * SEC, 3 * SEC]);
+    m.undo();
+    assert_eq!(v1(&m).iter().map(|c| (c.id, c.start)).collect::<Vec<_>>(), before);
+    m.shift_clips(forward, 0).unwrap();
+}

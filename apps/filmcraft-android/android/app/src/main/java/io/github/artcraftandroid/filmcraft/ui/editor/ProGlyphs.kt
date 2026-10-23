@@ -135,4 +135,121 @@ object ProGlyphs {
         drawLine(c, Offset(u(21f), u(12f)), Offset(u(17f), u(8f)), s, StrokeCap.Round)
         drawLine(c, Offset(u(21f), u(12f)), Offset(u(17f), u(16f)), s, StrokeCap.Round)
     }
+
+    // ---- the tool bar ----
+
+    private fun DrawScope.ln(c: androidx.compose.ui.graphics.Color, x0: Float, y0: Float, x1: Float, y1: Float) =
+        drawLine(c, Offset(u(x0), u(y0)), Offset(u(x1), u(y1)), u(ICON_STROKE + 0.4f), StrokeCap.Round)
+
+    private fun DrawScope.arrowHead(c: androidx.compose.ui.graphics.Color, x: Float, y: Float, right: Boolean) {
+        val k = if (right) -1f else 1f
+        ln(c, x, y, x + 3f * k, y - 3f)
+        ln(c, x, y, x + 3f * k, y + 3f)
+    }
+
+    /** Selection (V): the pointer. */
+    val Selection = Glyph.Drawn { c ->
+        val p = Path().apply {
+            moveTo(u(6f), u(3f))
+            lineTo(u(18f), u(14f))
+            lineTo(u(12.5f), u(14.5f))
+            lineTo(u(15.5f), u(20.5f))
+            lineTo(u(13f), u(21.5f))
+            lineTo(u(10f), u(15.5f))
+            lineTo(u(6f), u(19f))
+            close()
+        }
+        drawPath(p, c, style = stroke())
+    }
+
+    /** Track Select Forward (A): two arrows into a bar. */
+    val TrackSelectForward = Glyph.Drawn { c ->
+        ln(c, 4f, 4f, 4f, 20f)
+        ln(c, 7f, 9f, 19f, 9f)
+        arrowHead(c, 19f, 9f, right = true)
+        ln(c, 7f, 15f, 19f, 15f)
+        arrowHead(c, 19f, 15f, right = true)
+    }
+
+    /** Ripple Edit (B): an edit bracket with an arrow pushing on. */
+    val RippleEdit = Glyph.Drawn { c ->
+        ln(c, 9f, 4f, 9f, 20f)
+        ln(c, 9f, 4f, 12f, 4f)
+        ln(c, 9f, 20f, 12f, 20f)
+        ln(c, 13f, 12f, 21f, 12f)
+        arrowHead(c, 21f, 12f, right = true)
+        ln(c, 3f, 12f, 7f, 12f)
+    }
+
+    /** Rolling Edit (N): two brackets back to back with arrows both ways. */
+    val RollingEdit = Glyph.Drawn { c ->
+        ln(c, 10f, 4f, 10f, 20f)
+        ln(c, 14f, 4f, 14f, 20f)
+        ln(c, 7f, 4f, 10f, 4f)
+        ln(c, 7f, 20f, 10f, 20f)
+        ln(c, 14f, 4f, 17f, 4f)
+        ln(c, 14f, 20f, 17f, 20f)
+        ln(c, 2f, 12f, 7f, 12f)
+        arrowHead(c, 2f, 12f, right = false)
+        ln(c, 17f, 12f, 22f, 12f)
+        arrowHead(c, 22f, 12f, right = true)
+    }
+
+    /** Rate Stretch (R): a clip with arrows out of both ends. */
+    val RateStretch = Glyph.Drawn { c ->
+        drawRoundRect(c, Offset(u(7f), u(7f)), Size(u(10f), u(10f)), CornerRadius(u(1.5f)), style = stroke())
+        ln(c, 2f, 12f, 6f, 12f)
+        arrowHead(c, 2f, 12f, right = false)
+        ln(c, 18f, 12f, 22f, 12f)
+        arrowHead(c, 22f, 12f, right = true)
+    }
+
+    /** Slip (Y): footage moving inside fixed edges. */
+    val Slip = Glyph.Drawn { c ->
+        ln(c, 3f, 5f, 3f, 19f)
+        ln(c, 21f, 5f, 21f, 19f)
+        ln(c, 7f, 12f, 17f, 12f)
+        arrowHead(c, 7f, 12f, right = false)
+        arrowHead(c, 17f, 12f, right = true)
+        ln(c, 7f, 7f, 17f, 7f)
+        ln(c, 7f, 17f, 17f, 17f)
+    }
+
+    /** Slide (U): a clip moving between its neighbours. */
+    val Slide = Glyph.Drawn { c ->
+        drawRoundRect(c, Offset(u(8f), u(8f)), Size(u(8f), u(8f)), CornerRadius(u(1.5f)), style = stroke())
+        ln(c, 2f, 6f, 2f, 18f)
+        ln(c, 22f, 6f, 22f, 18f)
+        ln(c, 4f, 12f, 7f, 12f)
+        ln(c, 17f, 12f, 20f, 12f)
+        arrowHead(c, 20f, 12f, right = true)
+        arrowHead(c, 4f, 12f, right = false)
+    }
+
+    /** Hand (H): an open hand. */
+    val Hand = Glyph.Drawn { c ->
+        for ((x, top) in listOf(8f to 6f, 11f to 4f, 14f to 4.5f, 17f to 7f)) {
+            drawRoundRect(c, Offset(u(x - 1.3f), u(top)), Size(u(2.6f), u(12f - top)), CornerRadius(u(1.3f)), style = stroke())
+        }
+        val palm = Path().apply {
+            moveTo(u(6.7f), u(12f))
+            lineTo(u(4.5f), u(10.5f))
+            cubicTo(u(3f), u(10f), u(2.5f), u(12f), u(4f), u(13f))
+            lineTo(u(8f), u(19f))
+            cubicTo(u(9f), u(20.5f), u(10f), u(21f), u(12f), u(21f))
+            lineTo(u(14f), u(21f))
+            cubicTo(u(17f), u(21f), u(18.3f), u(19f), u(18.3f), u(16f))
+            lineTo(u(18.3f), u(12f))
+        }
+        drawPath(palm, c, style = stroke())
+    }
+
+    /** Zoom (Z): a magnifier with a plus. */
+    val Zoom = Glyph.Drawn { c ->
+        drawCircle(c, u(6.5f), Offset(u(10f), u(10f)), style = stroke())
+        ln(c, 15f, 15f, 21f, 21f)
+        ln(c, 7f, 10f, 13f, 10f)
+        ln(c, 10f, 7f, 10f, 13f)
+    }
 }
+

@@ -357,7 +357,8 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
                                 ev.changes.forEach { it.consume() }
                             }
                         }
-                        if (!moved) ed.togglePlay()
+                        // Pro mode's Type tool: a tap in the Program monitor starts a title
+                        if (!moved) if (ed.proMode && ed.proTool == ProTool.Type) ed.titleAt = ed.playhead else ed.togglePlay()
                     }
                 }
                 .semantics { contentDescription = "Preview" },

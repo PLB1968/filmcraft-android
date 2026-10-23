@@ -2,6 +2,28 @@ package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
+import io.github.artcraftandroid.filmcraft.ui.FcDialog
+import io.github.artcraftandroid.filmcraft.ui.GlyphIcon
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -78,6 +100,9 @@ fun ProEditor(ed: EditorController) {
     BackHandler {
         if (ed.proSelection.isNotEmpty()) ed.proSelect(null) else ed.closeEditor()
     }
+    // a hardware keyboard's shortcuts, as on the desktop
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
@@ -85,10 +110,14 @@ fun ProEditor(ed: EditorController) {
             .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal))
             .statusBarsPadding()
             .navigationBarsPadding()
+            .focusRequester(focus)
+            .focusable()
+            .onPreviewKeyEvent { proShortcut(ed, it) }
             .testTag("screen_pro_editor"),
     ) {
         val desktop = maxWidth >= 600.dp || maxWidth > maxHeight
         if (desktop) DesktopLayout(ed) else PortraitLayout(ed)
+        ed.titleAt?.let { at -> TitleDialog(ed, at) }
         ed.busy?.let { text ->
             Box(Modifier.fillMaxSize().background(Fc.Scrim).clickable(enabled = true, onClick = {}), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -176,7 +205,10 @@ private fun DesktopLayout(ed: EditorController) {
                         val now = if (ed.proMonitorHeight > 0f) ed.proMonitorHeight else with(density) { monitors.toPx() }
                         ed.proMonitorHeight = (now + d).coerceIn(with(density) { 120.dp.toPx() }, with(density) { max(120f, (h - 180.dp).value).dp.toPx() })
                     }
-                    ProTimelinePanel(ed, compact = false, modifier = Modifier.fillMaxWidth().weight(1f))
+                    Row(Modifier.fillMaxWidth().weight(1f)) {
+                        ProToolBar(ed, vertical = true)
+                        ProTimelinePanel(ed, compact = false, modifier = Modifier.weight(1f).fillMaxHeight())
+                    }
                 }
                 Divider(horizontal = false, "Resize Effect Controls") { d ->
                     val now = if (ed.proSideWidth > 0f) ed.proSideWidth else with(density) { side.toPx() }
@@ -215,7 +247,10 @@ private fun PortraitLayout(ed: EditorController) {
                     }
                 }
                 when (tab) {
-                    0 -> ProTimelinePanel(ed, compact = true, modifier = Modifier.fillMaxWidth().weight(1f))
+                    0 -> {
+                        ProToolBar(ed, vertical = false)
+                        ProTimelinePanel(ed, compact = true, modifier = Modifier.fillMaxWidth().weight(1f))
+                    }
                     1 -> SourceMonitor(Modifier.fillMaxWidth().weight(1f))
                     else -> EffectControls(ed, Modifier.fillMaxWidth().weight(1f))
                 }
@@ -264,7 +299,8 @@ private fun PanelTitle(title: String, trailing: String = "") {
 private fun ProgramMonitor(ed: EditorController, modifier: Modifier) {
     Column(modifier.background(Fc.Black).testTag("pro_program_monitor")) {
         PanelTitle("Program", TimelineMath.timecode(ed.duration, ed.rateNum, ed.rateDen))
-        Preview(ed, Modifier.fillMaxWidth().weight(1f))
+        val trim = ed.trimView
+        if (trim != null) TrimMonitor(ed, trim, Modifier.fillMaxWidth().weight(1f)) else Preview(ed, Modifier.fillMaxWidth().weight(1f))
         ProTransport(ed)
     }
 }
@@ -349,5 +385,151 @@ private fun InfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().height(32.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = FcType.BodySmall, color = Fc.Secondary, modifier = Modifier.weight(1f))
         Text(value, style = TextStyle(fontFamily = Inter, fontSize = 14.sp, color = Fc.AccentLight))
+    }
+}
+
+/** The tool bar: a column beside the timeline on the desktop layout, a row above it on a phone upright. */
+@Composable
+private fun ProToolBar(ed: EditorController, vertical: Boolean) {
+    val tools = ProTool.entries
+    val content: @Composable () -> Unit = {
+        for (t in tools) {
+            val on = ed.proTool == t
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .padding(2.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (on) Fc.Accent else Color.Transparent)
+                    .clickable(role = Role.RadioButton) { ed.proTool = t }
+                    .testTag("pro_tool_${t.name.lowercase()}")
+                    .semantics {
+                        contentDescription = "${t.label} tool (${t.key})"
+                        selected = on
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                GlyphIcon(toolGlyph(t), if (on) Color.White else Fc.Icon, size = 22.dp)
+            }
+        }
+    }
+    if (vertical) {
+        Column(Modifier.width(48.dp).fillMaxHeight().background(Fc.Panel).verticalScroll(rememberScrollState()).testTag("pro_tool_bar"), horizontalAlignment = Alignment.CenterHorizontally) { content() }
+    } else {
+        Row(Modifier.fillMaxWidth().height(48.dp).background(Fc.Panel).horizontalScroll(rememberScrollState()).testTag("pro_tool_bar"), verticalAlignment = Alignment.CenterVertically) { content() }
+    }
+}
+
+private fun toolGlyph(t: ProTool): Glyph = when (t) {
+    ProTool.Selection -> ProGlyphs.Selection
+    ProTool.TrackSelectForward -> ProGlyphs.TrackSelectForward
+    ProTool.RippleEdit -> ProGlyphs.RippleEdit
+    ProTool.RollingEdit -> ProGlyphs.RollingEdit
+    ProTool.RateStretch -> ProGlyphs.RateStretch
+    ProTool.Razor -> LucideIcons.Scissors.glyph()
+    ProTool.Slip -> ProGlyphs.Slip
+    ProTool.Slide -> ProGlyphs.Slide
+    ProTool.Hand -> ProGlyphs.Hand
+    ProTool.Zoom -> ProGlyphs.Zoom
+    ProTool.Type -> LucideIcons.Type.glyph()
+}
+
+/** The desktop's shortcuts on a hardware keyboard; true when the key was one. */
+private fun proShortcut(ed: EditorController, e: KeyEvent): Boolean {
+    if (e.type != KeyEventType.KeyDown) return false
+    val ctrl = e.isCtrlPressed || e.isMetaPressed
+    val shift = e.isShiftPressed
+    if (ctrl) {
+        return when (e.key) {
+            Key.Z -> {
+                if (shift) ed.redo() else ed.undo()
+                true
+            }
+            else -> false
+        }
+    }
+    if (e.isAltPressed) return false
+    val tool = ProTool.entries.firstOrNull { e.key == keyOf(it.key) }
+    if (tool != null && !shift) {
+        ed.proTool = tool
+        return true
+    }
+    when (e.key) {
+        Key.J -> ed.shuttleBack()
+        Key.K -> ed.shuttleStop()
+        Key.L -> ed.shuttleForward()
+        Key.Spacebar -> ed.togglePlay()
+        Key.I -> ed.markIn()
+        Key.O -> ed.markOut()
+        Key.M -> ed.addMarker()
+        Key.S -> ed.setSnapping(ed.pro?.snapping != true)
+        Key.DirectionLeft -> ed.step(if (shift) -5 else -1)
+        Key.DirectionRight -> ed.step(if (shift) 5 else 1)
+        Key.Delete, Key.Backspace -> if (ed.proSelection.isNotEmpty()) ed.deleteSelection(ripple = shift)
+        Key.Equals, Key.Plus, Key.NumPadAdd -> ed.proPxPerSecond = (ed.proPxPerSecond * 1.5f).coerceIn(2f, 100_000f)
+        Key.Minus, Key.NumPadSubtract -> ed.proPxPerSecond = (ed.proPxPerSecond / 1.5f).coerceIn(2f, 100_000f)
+        Key.Backslash -> ed.proPxPerSecond = 0f
+        else -> return false
+    }
+    return true
+}
+
+private fun keyOf(c: Char): Key = when (c) {
+    'V' -> Key.V
+    'A' -> Key.A
+    'B' -> Key.B
+    'N' -> Key.N
+    'R' -> Key.R
+    'C' -> Key.C
+    'Y' -> Key.Y
+    'U' -> Key.U
+    'H' -> Key.H
+    'Z' -> Key.Z
+    else -> Key.T
+}
+
+/** The Program monitor during a trim: the edit's frame, or the two sides of it, with how far it moved. */
+@Composable
+private fun TrimMonitor(ed: EditorController, v: TrimView, modifier: Modifier) {
+    Column(modifier.background(Fc.Black).testTag("pro_trim_monitor")) {
+        Row(Modifier.fillMaxWidth().weight(1f).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            v.frames.forEachIndexed { i, f ->
+                Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFF0B0B0B)), contentAlignment = Alignment.Center) {
+                    val pic = ed.trimPictures.getOrNull(i)
+                    if (pic != null) {
+                        Image(pic, contentDescription = f.label, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    } else {
+                        Text(if (f.item == null) "No picture" else "", style = FcType.BodySmall, color = Fc.Detail)
+                    }
+                    Text(
+                        f.label,
+                        style = FcType.Caption,
+                        color = Color.White,
+                        modifier = Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(4.dp)).background(Fc.Scrim).padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        }
+        Text(
+            v.caption,
+            style = TextStyle(fontFamily = Inter, fontSize = 14.sp, color = Fc.AccentLight),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** The Type tool: a new title at [at] (on a free video track, as the phone's text). */
+@Composable
+private fun TitleDialog(ed: EditorController, at: Long) {
+    var text by remember(at) { mutableStateOf("") }
+    FcDialog("New title at ${TimelineMath.timecode(at, ed.rateNum, ed.rateDen)}", "Add", onConfirm = { ed.addTitle(at, text) }, onDismiss = { ed.titleAt = null }, confirmEnabled = text.isNotBlank()) {
+        BasicTextField(
+            text,
+            { text = it },
+            textStyle = TextStyle(fontFamily = Inter, fontSize = 16.sp, color = Fc.Title),
+            cursorBrush = SolidColor(Fc.Title),
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Fc.Raised).padding(12.dp).testTag("pro_title_field"),
+        )
     }
 }
