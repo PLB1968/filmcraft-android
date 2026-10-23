@@ -71,7 +71,6 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.artcraftandroid.filmcraft.core.ClipKind
@@ -925,7 +924,7 @@ private fun DrawScope.drawClip(
             style.copy(color = content.copy(alpha = alpha * dim)),
             overflow = TextOverflow.Ellipsis,
             maxLines = 1,
-            size = IntSize(room, (h - 2.dp.toPx()).toInt().coerceAtLeast(1)),
+            size = Size(room.toFloat(), max(1f, h - 2.dp.toPx())),
         )
     }
 }
