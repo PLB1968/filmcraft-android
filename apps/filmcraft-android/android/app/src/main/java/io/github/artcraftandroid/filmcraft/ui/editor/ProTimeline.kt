@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -154,7 +155,7 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
     val header = if (compact) 132.dp else 216.dp
     Box(modifier.background(Fc.Black).testTag("pro_timeline")) {
         Column(Modifier.fillMaxSize()) {
-            TimelineBar(ed, p) { items -> menu = ProMenu(Offset(with(density) { 160.dp.toPx() }, 0f), items) }
+            TimelineBar(ed, p, compact) { items -> menu = ProMenu(Offset(with(density) { 160.dp.toPx() }, 0f), items) }
             if (p == null) return@Column
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 val headerPx = with(density) { header.toPx() }
@@ -314,44 +315,49 @@ private fun inOutLabel(p: ProTimeline): String {
     }
 }
 
-/** The bar over the timeline: the playhead's timecode, Snap, Linked Selection, Add Marker, Add Tracks, zoom. */
+/**
+ * The bar over the timeline: the playhead's timecode, Snap, Linked Selection, Add Marker, Add
+ * Tracks, zoom and In/Out. The buttons share the width, so the bar fits a phone held upright.
+ */
 @Composable
-private fun TimelineBar(ed: EditorController, p: ProTimeline?, onMenu: (List<Pair<String, () -> Unit>>) -> Unit) {
+private fun TimelineBar(ed: EditorController, p: ProTimeline?, compact: Boolean, onMenu: (List<Pair<String, () -> Unit>>) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().height(Touch).background(Fc.Panel).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+        Modifier.fillMaxWidth().height(Touch).background(Fc.Panel).padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             TimelineMath.timecode(ed.playhead, ed.rateNum, ed.rateDen),
             // tabular digits: the timecode keeps its width as it counts, so the buttons beside it stay put
-            style = TextStyle(fontFamily = Inter, fontSize = 18.sp, color = Fc.AccentLight, fontFeatureSettings = "tnum"),
+            style = TextStyle(fontFamily = Inter, fontSize = if (compact) 13.sp else 16.sp, color = Fc.AccentLight, fontFeatureSettings = "tnum"),
             maxLines = 1,
             softWrap = false,
-            modifier = Modifier.padding(end = 12.dp).testTag("pro_timecode"),
+            modifier = Modifier.padding(end = 6.dp).testTag("pro_timecode"),
         )
-        Text("${ed.proTool.label} (${ed.proTool.key})", style = FcType.Caption, color = Fc.Secondary, modifier = Modifier.padding(end = 8.dp).testTag("pro_tool_name"))
+        if (!compact) {
+            Text("${ed.proTool.label} (${ed.proTool.key})", style = FcType.Caption, color = Fc.Secondary, maxLines = 1, modifier = Modifier.padding(end = 8.dp).testTag("pro_tool_name"))
+        }
         val snapping = p?.snapping == true
         val linked = p?.linkedSelection == true
-        BarToggle(ProGlyphs.Magnet, "Snap in Timeline", snapping, "pro_snap") { ed.setSnapping(!snapping) }
-        BarToggle(ProGlyphs.Link, "Linked Selection", linked, "pro_linked_selection") { ed.setLinkedSelection(!linked) }
-        BarButton(ProGlyphs.Marker, "Add Marker", "pro_add_marker") { ed.addMarker() }
-        BarButton(LucideIcons.Plus.glyph(), "Add Tracks", "pro_add_tracks") {
+        val slot = Modifier.weight(1f).widthIn(max = Touch).fillMaxHeight()
+        BarToggle(ProGlyphs.Magnet, "Snap in Timeline", snapping, "pro_snap", slot) { ed.setSnapping(!snapping) }
+        BarToggle(ProGlyphs.Link, "Linked Selection", linked, "pro_linked_selection", slot) { ed.setLinkedSelection(!linked) }
+        BarButton(ProGlyphs.Marker, "Add Marker", "pro_add_marker", slot) { ed.addMarker() }
+        BarButton(LucideIcons.Plus.glyph(), "Add Tracks", "pro_add_tracks", slot) {
             onMenu(listOf("Add Video Track" to { ed.addTracks(1, 0) }, "Add Audio Track" to { ed.addTracks(0, 1) }, "Add Video and Audio Track" to { ed.addTracks(1, 1) }))
         }
-        BarButton(ProGlyphs.Fit, "Zoom to Sequence", "pro_zoom_fit") {
+        BarButton(ProGlyphs.Fit, "Zoom to Sequence", "pro_zoom_fit", slot) {
             ed.proPxPerSecond = 0f
             ed.proScroll = 0L
         }
-        BarButton(ProGlyphs.MarkIn, "Mark In", "pro_mark_in") { ed.markIn() }
-        BarButton(ProGlyphs.MarkOut, "Mark Out", "pro_mark_out") { ed.markOut() }
+        BarButton(ProGlyphs.MarkIn, "Mark In", "pro_mark_in", slot) { ed.markIn() }
+        BarButton(ProGlyphs.MarkOut, "Mark Out", "pro_mark_out", slot) { ed.markOut() }
     }
 }
 
 @Composable
-private fun BarToggle(glyph: Glyph, description: String, on: Boolean, tag: String, onClick: () -> Unit) {
+private fun BarToggle(glyph: Glyph, description: String, on: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        Modifier
-            .size(Touch)
+        modifier
             .padding(2.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (on) Fc.Accent.copy(alpha = 0.35f) else Color.Transparent)
@@ -363,17 +369,17 @@ private fun BarToggle(glyph: Glyph, description: String, on: Boolean, tag: Strin
             },
         contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(glyph, if (on) Fc.AccentLight else Fc.Icon, size = 22.dp)
+        GlyphIcon(glyph, if (on) Fc.AccentLight else Fc.Icon, size = 20.dp)
     }
 }
 
 @Composable
-private fun BarButton(glyph: Glyph, description: String, tag: String, onClick: () -> Unit) {
+private fun BarButton(glyph: Glyph, description: String, tag: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        Modifier.size(Touch).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).testTag(tag).semantics { contentDescription = description },
+        modifier.clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, onClick = onClick).testTag(tag).semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(glyph, Fc.Icon, size = 22.dp)
+        GlyphIcon(glyph, Fc.Icon, size = 20.dp)
     }
 }
 
@@ -1197,7 +1203,8 @@ private fun DrawScope.drawClip(
             if (x >= x0 && x <= x1) drawKeyframe(Offset(x, y), "linear", Color.White.copy(alpha = alpha), radius = 3.5.dp.toPx())
         }
     }
-    val left = max(x0, 0f) + 4.dp.toPx()
+    // the name sits at the clip's head and scrolls with it
+    val left = x0 + 4.dp.toPx()
     val room = (x1 - left - 4.dp.toPx()).toInt()
     if (room > 12.dp.toPx() && h > 14.dp.toPx()) {
         drawText(

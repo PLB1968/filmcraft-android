@@ -572,32 +572,35 @@ private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
 /** The tool bar: a column beside the timeline on the desktop layout, a row above it on a phone upright. */
 @Composable
 private fun ProToolBar(ed: EditorController, vertical: Boolean) {
-    val tools = ProTool.entries
-    val content: @Composable () -> Unit = {
-        for (t in tools) {
-            val on = ed.proTool == t
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .padding(2.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (on) Fc.Accent else Color.Transparent)
-                    .clickable(role = Role.RadioButton) { ed.proTool = t }
-                    .testTag("pro_tool_${t.name.lowercase()}")
-                    .semantics {
-                        contentDescription = "${t.label} tool (${t.key})"
-                        selected = on
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                GlyphIcon(toolGlyph(t), if (on) Color.White else Fc.Icon, size = 22.dp)
-            }
+    // every tool shares the bar's length, so all eleven fit without scrolling
+    if (vertical) {
+        Column(Modifier.width(48.dp).fillMaxHeight().background(Fc.Panel).testTag("pro_tool_bar"), horizontalAlignment = Alignment.CenterHorizontally) {
+            for (t in ProTool.entries) ToolButton(ed, t, Modifier.weight(1f).fillMaxWidth())
+        }
+    } else {
+        Row(Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel).testTag("pro_tool_bar"), verticalAlignment = Alignment.CenterVertically) {
+            for (t in ProTool.entries) ToolButton(ed, t, Modifier.weight(1f).fillMaxHeight())
         }
     }
-    if (vertical) {
-        Column(Modifier.width(48.dp).fillMaxHeight().background(Fc.Panel).verticalScroll(rememberScrollState()).testTag("pro_tool_bar"), horizontalAlignment = Alignment.CenterHorizontally) { content() }
-    } else {
-        Row(Modifier.fillMaxWidth().height(48.dp).background(Fc.Panel).horizontalScroll(rememberScrollState()).testTag("pro_tool_bar"), verticalAlignment = Alignment.CenterVertically) { content() }
+}
+
+@Composable
+private fun ToolButton(ed: EditorController, t: ProTool, modifier: Modifier) {
+    val on = ed.proTool == t
+    Box(
+        modifier
+            .padding(2.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (on) Fc.Accent else Color.Transparent)
+            .clickable(role = Role.RadioButton) { ed.proTool = t }
+            .testTag("pro_tool_${t.name.lowercase()}")
+            .semantics {
+                contentDescription = "${t.label} tool (${t.key})"
+                selected = on
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        GlyphIcon(toolGlyph(t), if (on) Color.White else Fc.Icon, size = 20.dp)
     }
 }
 
