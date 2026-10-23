@@ -1309,3 +1309,84 @@ fn clips_selected_forward_move_together_as_one_step() {
     assert_eq!(v1(&m).iter().map(|c| (c.id, c.start)).collect::<Vec<_>>(), before);
     m.shift_clips(forward, 0).unwrap();
 }
+
+// ---- Pro mode: the Project panel, the Source monitor, three-point editing ----
+
+#[test]
+fn the_project_panel_lists_imported_media_in_order_with_their_use() {
+    let (m, d, ids) = two_clips();
+    let extra = m.import(vec![picture(&d), tone(&d, 1.0)]).unwrap();
+    let bin = m.project_bin();
+    assert_eq!(bin.len(), 4);
+    let a = clip(&m, ids[0]).item;
+    assert_eq!((bin[0].id, bin[0].kind, bin[0].uses, bin[0].duration), (a, pro::BinKind::Video, 2, 2 * SEC));
+    assert!(bin[0].has_video && bin[0].has_audio && bin[0].width == 320);
+    assert_eq!((bin[2].id, bin[2].kind, bin[2].uses, bin[2].duration), (extra[0].id, pro::BinKind::Image, 0, 0));
+    assert_eq!((bin[3].kind, bin[3].has_video), (pro::BinKind::Audio, false));
+}
+
+#[test]
+fn three_point_insert_and_overwrite_use_the_source_in_out_and_the_patched_tracks() {
+    let (m, d, ids) = two_clips();
+    let c = movie(&d, "c.mp4", DemoScene::Plasma, 72);
+    let item = m.import(vec![c]).unwrap()[0].id;
+    assert!(m.source_info().is_none());
+    let src = m.open_source(item).unwrap();
+    assert_eq!((src.item, src.start, src.end, src.playhead), (item, 0, 3 * SEC, 0));
+    // scrub, mark In at 1 s and Out on the last frame before 2 s
+    assert_eq!(m.set_source_playhead(SEC).unwrap(), SEC);
+    m.set_source_mark(true, Some(SEC)).unwrap();
+    let last = 2 * SEC - SEC / 24;
+    m.set_source_mark(false, Some(last)).unwrap();
+    let src = m.source_info().unwrap();
+    assert_eq!((src.mark_in, src.mark_out), (Some(SEC), Some(last)));
+    // Insert at the playhead (2 s, the cut): the second clip moves on by a second
+    m.set_playhead(2 * SEC);
+    let new = m.source_edit(false).unwrap();
+    assert!(!new.is_empty());
+    let v = v1(&m);
+    assert_eq!(v.iter().map(|c| c.id).filter(|c| *c != ids[0] && *c != ids[1]).count(), 1);
+    let ins = v.iter().find(|c| new.contains(&c.id)).unwrap();
+    assert_eq!((ins.start, ins.duration, ins.source_in), (2 * SEC, SEC, SEC));
+    assert_eq!(pclip(&m, ids[1]).start, 3 * SEC, "insert pushes later clips");
+    assert_eq!(m.pro_timeline().unwrap().playhead, 3 * SEC, "the playhead goes to the end of the edit");
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Insert"));
+    m.undo();
+    // Overwrite at the sequence In (which wins over the playhead), onto V2 when patched there
+    m.add_tracks(1, 0).unwrap();
+    let v2 = m.pro_timeline().unwrap().video_tracks[1].id;
+    m.set_source_patch(v2, true).unwrap();
+    m.set_mark_in(Some(SEC / 2)).unwrap();
+    let new = m.source_edit(true).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let ov = t.clips.iter().find(|c| new.contains(&c.id) && c.track == v2).unwrap();
+    assert_eq!(ov.start, SEC / 2);
+    assert_eq!(pclip(&m, ids[1]).start, 2 * SEC, "overwrite moves nothing");
+    // nothing patched: a message, not a crash
+    m.set_source_patch(v2, false).unwrap();
+    let a1 = m.pro_timeline().unwrap().audio_tracks[0].id;
+    m.set_source_patch(a1, false).unwrap();
+    assert!(matches!(m.source_edit(false), Err(MobileError::Command(_))));
+    m.close_source().unwrap();
+    assert!(m.source_info().is_none());
+    assert!(matches!(m.source_edit(false), Err(MobileError::Command(_))));
+}
+
+#[test]
+fn lift_leaves_a_gap_and_extract_closes_it() {
+    let (m, _d, ids) = two_clips();
+    assert!(matches!(m.lift_extract(false), Err(MobileError::Command(_))), "no In/Out yet");
+    m.set_mark_in(Some(SEC)).unwrap();
+    // the Out frame is the last one taken (Premiere's In and Out are both inclusive)
+    m.set_mark_out(Some(3 * SEC - SEC / 30)).unwrap();
+    m.lift_extract(false).unwrap();
+    let v = v1(&m);
+    assert_eq!(v.iter().map(|c| (c.start, c.duration)).collect::<Vec<_>>(), vec![(0, SEC), (3 * SEC, 2 * SEC)]);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Lift"));
+    m.undo();
+    m.lift_extract(true).unwrap();
+    let v = v1(&m);
+    assert_eq!(v.iter().map(|c| (c.start, c.duration)).collect::<Vec<_>>(), vec![(0, SEC), (SEC, 2 * SEC)]);
+    assert_eq!(v[1].source_in, SEC, "the rest of the second clip closes up");
+    assert!(v.iter().all(|c| c.id != ids[0] || c.duration == SEC));
+}

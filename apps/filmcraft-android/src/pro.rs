@@ -477,3 +477,180 @@ pub(crate) fn shift_clips(s: &mut Session, clips: &[u64], delta: i64) -> Result<
     ex(s, "timeline.move", json!({"moves": moves, "insert": false}))?;
     Ok(())
 }
+
+// ---- phase 3: the Project panel, the Source monitor, three-point editing ----
+
+/// What a Project panel item is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BinKind {
+    Video,
+    Audio,
+    Image,
+    /// Black video, colour mattes and the like.
+    Generated,
+    Missing,
+}
+
+/// One item in the Project panel (the media imported into the project).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct BinItem {
+    pub id: u64,
+    pub name: String,
+    pub kind: BinKind,
+    /// The media's length; 0 for stills.
+    pub duration: i64,
+    pub width: u32,
+    pub height: u32,
+    pub has_video: bool,
+    pub has_audio: bool,
+    /// The media file, empty for generated media.
+    pub path: String,
+    /// The item's own In and Out (set in the Source monitor).
+    pub mark_in: Option<i64>,
+    pub mark_out: Option<i64>,
+    /// How many clips on the open sequence play it.
+    pub uses: u32,
+}
+
+/// The Project panel: every media item, in the order it was imported.
+pub(crate) fn bin(s: &Session) -> Vec<BinItem> {
+    let used = |id: filmcraft_project::ItemId| -> u32 {
+        let Some(seq) = s.active_sequence() else { return 0 };
+        let n = seq.video_tracks.iter().chain(&seq.audio_tracks).flat_map(|t| &t.items).filter(|c| c.item == id).count();
+        u32::try_from(n).unwrap_or(u32::MAX)
+    };
+    let mut items: Vec<_> = s
+        .project
+        .items
+        .values()
+        .filter_map(|i| {
+            let ItemKind::Media(m) = &i.kind else { return None };
+            let path = match &m.media {
+                MediaRef::File { path } => path.clone(),
+                MediaRef::Generator(_) => String::new(),
+            };
+            let still = m.info.kind == filmcraft_media::MediaKind::Still;
+            let kind = if m.offline || (!path.is_empty() && !std::path::Path::new(&path).exists()) {
+                BinKind::Missing
+            } else if path.is_empty() {
+                BinKind::Generated
+            } else if still {
+                BinKind::Image
+            } else if m.info.video.is_none() {
+                BinKind::Audio
+            } else {
+                BinKind::Video
+            };
+            let (width, height) = m.info.video.as_ref().map(|v| (v.width, v.height)).unwrap_or((0, 0));
+            Some((
+                i.created,
+                BinItem {
+                    id: i.id.0,
+                    name: i.name.clone(),
+                    kind,
+                    duration: if still { 0 } else { m.info.duration.0 },
+                    width,
+                    height,
+                    has_video: m.info.video.is_some(),
+                    has_audio: m.info.has_audio(),
+                    path,
+                    mark_in: m.mark_in.map(|t| t.0),
+                    mark_out: m.mark_out.map(|t| t.0),
+                    uses: used(i.id),
+                },
+            ))
+        })
+        .collect();
+    items.sort_by_key(|(created, b)| (*created, b.id));
+    items.into_iter().map(|(_, b)| b).collect()
+}
+
+/// The clip in the Source monitor.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SourceInfo {
+    pub item: u64,
+    pub name: String,
+    /// Where the clip can be scrubbed: `start` to `end` (ticks of its own time).
+    pub start: i64,
+    pub end: i64,
+    pub rate_num: i64,
+    pub rate_den: i64,
+    pub playhead: i64,
+    pub mark_in: Option<i64>,
+    pub mark_out: Option<i64>,
+    pub has_video: bool,
+    pub has_audio: bool,
+}
+
+pub(crate) fn source(s: &Session) -> Option<SourceInfo> {
+    let item = s.state.source_item?;
+    let v = filmcraft_engine::clip_ops::source_view(s, item)?;
+    let pi = s.project.item(item)?;
+    let (has_video, has_audio) = match &pi.kind {
+        ItemKind::Media(m) => (m.info.video.is_some(), m.info.has_audio()),
+        _ => (true, true),
+    };
+    Some(SourceInfo {
+        item: item.0,
+        name: pi.name.clone(),
+        start: v.start.0,
+        end: v.end.0,
+        rate_num: v.rate.num,
+        rate_den: v.rate.den,
+        playhead: s.state.source_playhead.0,
+        mark_in: v.mark_in.map(|t| t.0),
+        mark_out: v.mark_out.map(|t| t.0),
+        has_video,
+        has_audio,
+    })
+}
+
+/// Open a Project panel item in the Source monitor.
+pub(crate) fn open_source(s: &mut Session, item: u64) -> Result<SourceInfo, MobileError> {
+    ex(s, "source.open", json!({"item": item}))?;
+    source(s).ok_or_else(|| MobileError::Command("That clip can't be opened.".into()))
+}
+
+pub(crate) fn close_source(s: &mut Session) -> Result<(), MobileError> {
+    if s.state.source_item.is_some() {
+        ex(s, "source.close", json!({}))?;
+    }
+    Ok(())
+}
+
+/// Move the Source monitor's playhead (snapped to the clip's frames); returns where it is.
+pub(crate) fn set_source_playhead(s: &mut Session, time: i64) -> Result<i64, MobileError> {
+    let r = ex(s, "source.setPlayhead", json!({"time": time.max(0)}))?;
+    Ok(r["time"].as_i64().unwrap_or(0))
+}
+
+/// Mark the source clip's In (or Out) at `time`, or clear it (`None`); one undo step.
+pub(crate) fn set_source_mark(s: &mut Session, is_in: bool, time: Option<i64>) -> Result<(), MobileError> {
+    let item = s.state.source_item.ok_or_else(|| MobileError::Command("Open a clip in the Source monitor first.".into()))?;
+    ex(s, "project.setMarks", json!({"item": item.0, if is_in { "in" } else { "out" }: time.map(|t| t.max(0))}))?;
+    Ok(())
+}
+
+/// Insert (`overwrite` false) or Overwrite the source clip's In to Out into the sequence, at the
+/// sequence In (or the playhead), on the patched tracks: three-point editing. Returns the new clips.
+pub(crate) fn source_edit(s: &mut Session, overwrite: bool) -> Result<Vec<u64>, MobileError> {
+    if s.state.source_item.is_none() {
+        return Err(MobileError::Command("Open a clip in the Source monitor first.".into()));
+    }
+    let tg = s.targeting();
+    if tg.video_dest.is_none() && tg.audio_dest.is_none() {
+        return Err(MobileError::Command("Patch a source track (V or A beside the track names) first.".into()));
+    }
+    let r = ex(s, if overwrite { "source.overwrite" } else { "source.insert" }, json!({}))?;
+    Ok(r["clips"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect()).unwrap_or_default())
+}
+
+/// Lift (leave a gap) or Extract (close it) the sequence In to Out on the targeted tracks.
+pub(crate) fn lift_extract(s: &mut Session, extract: bool) -> Result<(), MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    if seq.mark_in.is_none() && seq.mark_out.is_none() {
+        return Err(MobileError::Command("Mark an In or Out point on the sequence first.".into()));
+    }
+    ex(s, if extract { "sequence.extract" } else { "sequence.lift" }, json!({}))?;
+    Ok(())
+}

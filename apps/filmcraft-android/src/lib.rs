@@ -38,7 +38,7 @@ pub mod text;
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use model::TimelineInfo;
 use presets::PresetInfo;
-use pro::{ProTimeline, TrackSwitches};
+use pro::{BinItem, ProTimeline, SourceInfo, TrackSwitches};
 use render::Renderer;
 use speech::{CaptionLook, CaptionStatus, SpeechAudio, SpeechSettings};
 use text::{Placement, TextStyle};
@@ -776,6 +776,48 @@ impl MobileSession {
     /// Move clips together by `delta`, each on its own track (one undo step).
     pub fn shift_clips(&self, clips: Vec<u64>, delta: i64) -> Result<(), MobileError> {
         self.main_edit(|s| pro::shift_clips(s, &clips, delta))
+    }
+
+    // ---- Pro mode: the Project panel, the Source monitor, three-point editing ----
+
+    /// The Project panel: the media imported into the project, in import order.
+    pub fn project_bin(&self) -> Vec<BinItem> {
+        pro::bin(&self.lock())
+    }
+
+    /// Open a Project panel item in the Source monitor.
+    pub fn open_source(&self, item: u64) -> Result<SourceInfo, MobileError> {
+        pro::open_source(&mut self.lock(), item)
+    }
+
+    /// The clip in the Source monitor, if any.
+    pub fn source_info(&self) -> Option<SourceInfo> {
+        pro::source(&self.lock())
+    }
+
+    pub fn close_source(&self) -> Result<(), MobileError> {
+        pro::close_source(&mut self.lock())
+    }
+
+    /// Move the Source monitor's playhead; returns where it landed.
+    pub fn set_source_playhead(&self, time: i64) -> Result<i64, MobileError> {
+        pro::set_source_playhead(&mut self.lock(), time)
+    }
+
+    /// Mark the source clip In (or Out) at `time`, or clear it.
+    pub fn set_source_mark(&self, is_in: bool, time: Option<i64>) -> Result<(), MobileError> {
+        pro::set_source_mark(&mut self.lock(), is_in, time)
+    }
+
+    /// Insert (,) or Overwrite (.) the source In to Out at the sequence In or the playhead, on
+    /// the patched tracks. Returns the new clips.
+    pub fn source_edit(&self, overwrite: bool) -> Result<Vec<u64>, MobileError> {
+        self.main_edit(|s| pro::source_edit(s, overwrite))
+    }
+
+    /// Lift (;) or Extract (') the sequence In to Out on the targeted tracks.
+    pub fn lift_extract(&self, extract: bool) -> Result<(), MobileError> {
+        self.main_edit(|s| pro::lift_extract(s, extract))
     }
 
     // ---- export ----
