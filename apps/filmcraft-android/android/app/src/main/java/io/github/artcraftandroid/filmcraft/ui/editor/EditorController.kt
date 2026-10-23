@@ -199,8 +199,6 @@ class EditorController(
 
     init {
         scope.launch { renderFrames() }
-        scope.launch { renderTrims() }
-        scope.launch { renderSource() }
     }
 
     // ---- reading ----
@@ -858,6 +856,11 @@ class EditorController(
         private set
     private val trimRequests = MutableStateFlow<TrimView?>(null)
 
+    // started here, after the flow it reads: the scope's dispatcher runs a new coroutine at once
+    init {
+        scope.launch { renderTrims() }
+    }
+
     /** Show [v] in the Program monitor (null: back to the program). */
     fun showTrim(v: TrimView?) {
         if (v == trimView) return
@@ -985,6 +988,11 @@ class EditorController(
     /** The Program monitor's playback resolution (1, 1/2, 1/4) and its safe margins. */
     var playbackScale by mutableFloatStateOf(1f)
     var safeMargins by mutableStateOf(false)
+
+    // started after the state it reads (see renderTrims)
+    init {
+        scope.launch { renderSource() }
+    }
 
     /** Import files into the Project panel without putting them on the timeline. */
     fun importToBin(kind: PickKind) {
