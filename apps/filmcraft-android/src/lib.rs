@@ -204,6 +204,12 @@ impl MobileSession {
         self.session.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// A Pro mode edit: a main-track edit (captions follow) that also takes away the crossfades
+    /// it leaves without a cut, in the same undo step.
+    fn pro_edit<R>(&self, f: impl FnOnce(&mut Session) -> Result<R, MobileError>) -> Result<R, MobileError> {
+        self.main_edit(|s| pro::tidy(s, f))
+    }
+
     /// A main-track edit; the captions then follow the footage they were made from.
     fn main_edit<R>(&self, f: impl FnOnce(&mut Session) -> Result<R, MobileError>) -> Result<R, MobileError> {
         let mut s = self.lock();
@@ -661,7 +667,7 @@ impl MobileSession {
 
     /// Delete a track and its clips (a sequence keeps one track of each kind).
     pub fn delete_track(&self, track: u64) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::delete_track(s, track))
+        self.pro_edit(|s| pro::delete_track(s, track))
     }
 
     /// Change a track's header switches (lock, sync lock, output, mute, solo, name): one undo step.
@@ -730,42 +736,42 @@ impl MobileSession {
 
     /// Move a clip to `start` on `track`, overwriting what is there (linked partners follow).
     pub fn pro_move_clip(&self, clip: u64, track: u64, start: i64) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::move_clip(s, clip, track, start))
+        self.pro_edit(|s| pro::move_clip(s, clip, track, start))
     }
 
     /// Delete the selected clips; `ripple` closes the gap they leave.
     pub fn delete_selection(&self, ripple: bool) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::delete_selection(s, ripple))
+        self.pro_edit(|s| pro::delete_selection(s, ripple))
     }
 
     // ---- Pro mode: the tools ----
 
     /// Trim a clip's head or tail by `delta` (`ripple`: Ripple Edit); returns the change made.
     pub fn trim_edge(&self, clip: u64, head: bool, delta: i64, ripple: bool) -> Result<i64, MobileError> {
-        self.main_edit(|s| pro::trim_edge(s, clip, head, delta, ripple))
+        self.pro_edit(|s| pro::trim_edge(s, clip, head, delta, ripple))
     }
 
     /// Rolling Edit: move the cut between `left` and `right`; returns the change made.
     pub fn roll_edit(&self, left: u64, right: u64, delta: i64) -> Result<i64, MobileError> {
-        self.main_edit(|s| pro::roll(s, left, right, delta))
+        self.pro_edit(|s| pro::roll(s, left, right, delta))
     }
 
     pub fn slip_clip(&self, clip: u64, delta: i64) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::slip(s, clip, delta))
+        self.pro_edit(|s| pro::slip(s, clip, delta))
     }
 
     pub fn slide_clip(&self, clip: u64, delta: i64) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::slide(s, clip, delta))
+        self.pro_edit(|s| pro::slide(s, clip, delta))
     }
 
     /// Rate Stretch a clip's head or tail by `delta`; returns its new speed.
     pub fn rate_stretch(&self, clip: u64, head: bool, delta: i64) -> Result<f64, MobileError> {
-        self.main_edit(|s| pro::rate_stretch(s, clip, head, delta))
+        self.pro_edit(|s| pro::rate_stretch(s, clip, head, delta))
     }
 
     /// Razor at `time`: one clip (and its partners), one track, or every track.
     pub fn razor(&self, time: i64, clip: Option<u64>, track: Option<u64>) -> Result<u32, MobileError> {
-        self.main_edit(|s| pro::razor(s, time, clip, track))
+        self.pro_edit(|s| pro::razor(s, time, clip, track))
     }
 
     /// Track Select Forward from `time` on `track` (every track when empty).
@@ -775,7 +781,7 @@ impl MobileSession {
 
     /// Move clips together by `delta`, each on its own track (one undo step).
     pub fn shift_clips(&self, clips: Vec<u64>, delta: i64) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::shift_clips(s, &clips, delta))
+        self.pro_edit(|s| pro::shift_clips(s, &clips, delta))
     }
 
     // ---- Pro mode: the Project panel, the Source monitor, three-point editing ----
@@ -812,12 +818,12 @@ impl MobileSession {
     /// Insert (,) or Overwrite (.) the source In to Out at the sequence In or the playhead, on
     /// the patched tracks. Returns the new clips.
     pub fn source_edit(&self, overwrite: bool) -> Result<Vec<u64>, MobileError> {
-        self.main_edit(|s| pro::source_edit(s, overwrite))
+        self.pro_edit(|s| pro::source_edit(s, overwrite))
     }
 
     /// Lift (;) or Extract (') the sequence In to Out on the targeted tracks.
     pub fn lift_extract(&self, extract: bool) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::lift_extract(s, extract))
+        self.pro_edit(|s| pro::lift_extract(s, extract))
     }
 
     // ---- Pro mode: Effect Controls and keyframes ----
@@ -870,21 +876,21 @@ impl MobileSession {
 
     /// Import files and put them at `time` on `track` (the double-tapped spot), overwriting.
     pub fn place_media(&self, paths: Vec<String>, track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
-        self.main_edit(|s| pro::place_media(s, &paths, track, time))
+        self.pro_edit(|s| pro::place_media(s, &paths, track, time))
     }
 
     /// A crossfade on the cut after clip `left`: picture and/or sound, `seconds` long.
     pub fn crossfade(&self, left: u64, video: bool, audio: bool, seconds: f64) -> Result<u32, MobileError> {
-        self.main_edit(|s| pro::crossfade(s, left, video, audio, seconds))
+        self.pro_edit(|s| pro::crossfade(s, left, video, audio, seconds))
     }
 
     pub fn remove_transition(&self, transition: u64) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::remove_transition(s, transition))
+        self.pro_edit(|s| pro::remove_transition(s, transition))
     }
 
     /// Close the gap on `track` at `time`.
     pub fn close_gap(&self, track: u64, time: i64) -> Result<(), MobileError> {
-        self.main_edit(|s| pro::close_gap(s, track, time))
+        self.pro_edit(|s| pro::close_gap(s, track, time))
     }
 
     // ---- export ----

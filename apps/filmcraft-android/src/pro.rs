@@ -1091,3 +1091,64 @@ pub(crate) fn close_gap(s: &mut Session, track: u64, time: i64) -> Result<(), Mo
     ex(s, "sequence.closeGap", json!({"track": track, "time": time.max(0)}))?;
     Ok(())
 }
+
+/// Crossfades that no longer sit on a cut (their clips trimmed apart, moved, covered or gone)
+/// and fades whose clip is gone: what [`prune_transitions`] takes away.
+pub(crate) fn stray_transitions(seq: &Sequence) -> Vec<filmcraft_project::TransitionId> {
+    let mut out = Vec::new();
+    for t in seq.video_tracks.iter().chain(&seq.audio_tracks) {
+        let clip = |id: ClipId| t.items.iter().find(|c| c.id == id);
+        for tr in &t.transitions {
+            let keep = match (tr.from, tr.to) {
+                (Some(a), Some(b)) => matches!((clip(a), clip(b)), (Some(a), Some(b)) if a.end() == b.start),
+                (Some(a), None) | (None, Some(a)) => clip(a).is_some(),
+                (None, None) => false,
+            };
+            if !keep {
+                out.push(tr.id);
+            }
+        }
+    }
+    out
+}
+
+/// Take away [`stray_transitions`] (as part of the edit that left them).
+pub(crate) fn prune_transitions(s: &mut Session) -> Result<(), MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let stray = stray_transitions(seq);
+    if stray.is_empty() {
+        return Ok(());
+    }
+    s.edit_sequence("Clear Transition", |q, _, _| {
+        for t in q.video_tracks.iter_mut().chain(q.audio_tracks.iter_mut()) {
+            t.transitions.retain(|tr| !stray.contains(&tr.id));
+        }
+        Ok(())
+    })?;
+    crate::edits::settle(s);
+    Ok(())
+}
+
+/// Run a Pro mode edit and take away the crossfades it left without a cut, as one undo step that
+/// keeps the edit's own name.
+pub(crate) fn tidy<R>(s: &mut Session, f: impl FnOnce(&mut Session) -> Result<R, MobileError>) -> Result<R, MobileError> {
+    let before = s.history.undo.len();
+    let mut label = None;
+    let r = s.edit_group("Edit", |s| {
+        let r = f(s).map_err(|e| filmcraft_engine::EngineError::Other(e.to_string()))?;
+        // the edit's own last step names the whole ("Add Media", not the import before it)
+        label = s.history.undo.get(before..).and_then(|steps| steps.last()).map(|u| u.0.clone());
+        prune_transitions(s).map_err(|e| filmcraft_engine::EngineError::Other(e.to_string()))?;
+        Ok(r)
+    });
+    let r = r.map_err(|e| match e {
+        filmcraft_engine::EngineError::Other(m) => MobileError::Command(m),
+        e => e.into(),
+    })?;
+    if s.history.undo.len() == before + 1
+        && let (Some(l), Some(last)) = (label, s.history.undo.last_mut())
+    {
+        last.0 = l;
+    }
+    Ok(r)
+}

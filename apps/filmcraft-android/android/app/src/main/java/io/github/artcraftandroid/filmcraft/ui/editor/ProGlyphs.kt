@@ -273,5 +273,29 @@ object ProGlyphs {
         }
         drawPath(p, c, style = stroke())
     }
+
+    /** Go to start: a bar with a triangle pointing at it. */
+    val GoToStart = Glyph.Drawn { c ->
+        ln(c, 6f, 5f, 6f, 19f)
+        val p = Path().apply {
+            moveTo(u(18f), u(5f))
+            lineTo(u(8.5f), u(12f))
+            lineTo(u(18f), u(19f))
+            close()
+        }
+        drawPath(p, c, style = stroke())
+    }
+
+    /** Go to end: the same, mirrored. */
+    val GoToEnd = Glyph.Drawn { c ->
+        ln(c, 18f, 5f, 18f, 19f)
+        val p = Path().apply {
+            moveTo(u(6f), u(5f))
+            lineTo(u(15.5f), u(12f))
+            lineTo(u(6f), u(19f))
+            close()
+        }
+        drawPath(p, c, style = stroke())
+    }
 }
 

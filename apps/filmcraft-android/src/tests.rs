@@ -1573,3 +1573,28 @@ fn crossfades_go_on_cuts_and_gaps_close() {
     assert_eq!(pclip(&m, ids[1]).start, 2 * SEC);
     assert!(m.pro_timeline().unwrap().transitions.is_empty());
 }
+
+#[test]
+fn crossfades_left_without_a_cut_go_with_the_edit_that_left_them() {
+    let (m, d, ids) = two_clips();
+    m.razor(SEC, Some(ids[0]), None).unwrap();
+    let c = v1(&m);
+    m.crossfade(c[0].id, true, true, 0.5).unwrap();
+    assert_eq!(m.pro_timeline().unwrap().transitions.len(), 2);
+    // trimming the clip away from its neighbour leaves no cut: its crossfades go too, in the same step
+    m.trim_edge(c[0].id, false, -SEC / 4, false).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert!(t.transitions.iter().all(|tr| tr.from != Some(c[0].id)), "{:?}", t.transitions);
+    let video_left = t.transitions.iter().filter(|tr| tr.track == t.video_tracks[0].id).count();
+    assert_eq!(video_left, 0);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Trim"), "one step, under the edit's own name");
+    m.undo();
+    assert_eq!(m.pro_timeline().unwrap().transitions.len(), 2, "undo brings the crossfades back with the trim");
+    // a crossfade still on its cut stays (a razor inside it, an overwrite elsewhere)
+    m.razor(SEC / 4, None, None).unwrap();
+    assert_eq!(m.pro_timeline().unwrap().transitions.len(), 2);
+    let v1_id = m.pro_timeline().unwrap().video_tracks[0].id;
+    m.place_media(vec![picture(&d)], v1_id, 4 * SEC).unwrap();
+    assert!(!m.pro_timeline().unwrap().transitions.is_empty());
+    let _ = ids;
+}

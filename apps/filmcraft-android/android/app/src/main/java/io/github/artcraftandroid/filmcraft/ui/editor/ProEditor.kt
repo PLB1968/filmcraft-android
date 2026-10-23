@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.activity.compose.BackHandler
@@ -46,6 +48,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -311,22 +314,19 @@ private fun ProgramMonitor(ed: EditorController, modifier: Modifier) {
 @Composable
 private fun ProTransport(ed: EditorController) {
     val has = ed.duration > 0L
-    Row(
-        Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    // the buttons wrap onto a second line rather than scroll (the playhead's timecode is above the timeline)
+    FlowRow(
+        Modifier.fillMaxWidth().background(Fc.Panel).padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.Center,
     ) {
-        Text(
-            TimelineMath.timecode(ed.playhead, ed.rateNum, ed.rateDen),
-            style = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = Fc.AccentLight, fontFeatureSettings = "tnum"),
-            modifier = Modifier.padding(horizontal = 8.dp).testTag("pro_program_timecode"),
-        )
         TransportButton(ed, "markIn", ProGlyphs.MarkIn, "Mark In", "pro_program_mark_in", has) { ed.markIn() }
         TransportButton(ed, "markOut", ProGlyphs.MarkOut, "Mark Out", "pro_program_mark_out", has) { ed.markOut() }
         TransportButton(ed, "goToIn", ProGlyphs.GoToIn, "Go to In", "pro_program_go_to_in", ed.pro?.markIn != null) { ed.goToIn() }
+        JumpButton(ProGlyphs.GoToStart, "Go to clip start; hold for the sequence start", "pro_program_go_to_start", has, { ed.goToClipEdge(end = false) }) { ed.goToSequenceEdge(end = false) }
         TransportButton(ed, "stepBack", Glyphs.StepBack, "Step Back 1 Frame", "editor_previous_frame_button", has) { ed.step(-1) }
         TransportButton(ed, "play", if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Stop" else "Play", "editor_play_button", has) { ed.togglePlay() }
         TransportButton(ed, "stepForward", Glyphs.StepForward, "Step Forward 1 Frame", "editor_next_frame_button", has) { ed.step(1) }
+        JumpButton(ProGlyphs.GoToEnd, "Go to clip end; hold for the sequence end", "pro_program_go_to_end", has, { ed.goToClipEdge(end = true) }) { ed.goToSequenceEdge(end = true) }
         TransportButton(ed, "goToOut", ProGlyphs.GoToOut, "Go to Out", "pro_program_go_to_out", ed.pro?.markOut != null) { ed.goToOut() }
         TransportButton(ed, "addMarker", ProGlyphs.Marker, "Add Marker", "pro_program_add_marker", has) { ed.addMarker() }
         TransportButton(ed, "prevMarker", LucideIcons.ChevronLeft.glyph(), "Go to Previous Marker", "pro_program_prev_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = false) }
@@ -347,6 +347,27 @@ private fun ProTransport(ed: EditorController) {
                 else -> 1f
             }
         }
+    }
+}
+
+/**
+ * Go to start / end: a tap goes to the selected clip's start or end (the cut before or after the
+ * playhead when nothing is selected); holding goes to the sequence's start or end. Its hold jumps
+ * rather than explaining it: the Play button's help covers it.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun JumpButton(glyph: Glyph, description: String, tag: String, enabled: Boolean, onClick: () -> Unit, onHold: () -> Unit) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .combinedClickable(enabled = enabled, role = Role.Button, onLongClick = onHold, onClick = onClick)
+            .testTag(tag)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        GlyphIcon(glyph, if (enabled) Fc.Icon else Fc.Disabled, size = 22.dp)
     }
 }
 
@@ -401,9 +422,9 @@ private fun SourceMonitor(ed: EditorController, modifier: Modifier) {
             }
         }
         if (src != null) SourceScrubber(ed, src)
-        Row(
-            Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        FlowRow(
+            Modifier.fillMaxWidth().background(Fc.Panel).padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.Center,
         ) {
             val has = src != null
             TransportButton(ed, "sourceMarkIn", ProGlyphs.MarkIn, "Mark In", "pro_source_mark_in", has) { ed.sourceMarkIn() }

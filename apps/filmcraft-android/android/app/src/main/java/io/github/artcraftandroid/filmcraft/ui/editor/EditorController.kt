@@ -1185,6 +1185,30 @@ class EditorController(
     fun toggleEffect(e: EffectInfo) = edit { toggleEffect(e.clip, e.index) }
     fun removeEffect(e: EffectInfo) = edit { removeEffect(e.clip, e.index) }
 
+    /**
+     * Go to the selected clip's start (or last frame); with nothing selected, to the cut before
+     * (or after) the playhead.
+     */
+    fun goToClipEdge(end: Boolean) {
+        val p = pro ?: return
+        val frame = TimelineMath.tickOfFrame(1, rateNum, rateDen)
+        val sel = proSelection
+        val c = sel.firstOrNull { cl -> p.videoTracks.any { it.id == cl.track } } ?: sel.firstOrNull()
+        val t = if (c != null) {
+            if (end) c.start + c.duration - frame else c.start
+        } else {
+            val cuts = p.clips.flatMap { listOf(it.start, it.start + it.duration) }.distinct()
+            if (end) cuts.filter { it > playhead + frame / 2 }.minOrNull() else cuts.filter { it < playhead - frame / 2 }.maxOrNull()
+        } ?: return
+        seek(t.coerceAtLeast(0L), draft = false)
+    }
+
+    /** Go to the sequence's start (or its last frame). */
+    fun goToSequenceEdge(end: Boolean) {
+        val frame = TimelineMath.tickOfFrame(1, rateNum, rateDen)
+        seek(if (end) (duration - frame).coerceAtLeast(0L) else 0L, draft = false)
+    }
+
     /** Go to the previous (or next) keyframe of [p] from the playhead. */
     fun goToKeyframe(p: ParamInfo, next: Boolean) {
         val now = playhead

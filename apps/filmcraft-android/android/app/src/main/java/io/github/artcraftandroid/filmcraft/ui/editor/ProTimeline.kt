@@ -79,6 +79,7 @@ import io.github.artcraftandroid.filmcraft.core.ProClip
 import io.github.artcraftandroid.filmcraft.core.ProMarker
 import io.github.artcraftandroid.filmcraft.core.ProTimeline
 import io.github.artcraftandroid.filmcraft.core.ProTrack
+import io.github.artcraftandroid.filmcraft.core.ProTransition
 import io.github.artcraftandroid.filmcraft.core.TrackSwitches
 import io.github.artcraftandroid.filmcraft.core.markerColors
 import io.github.artcraftandroid.filmcraft.ui.DialogButton
@@ -270,6 +271,12 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                                         if (existing.isNotEmpty()) add("Remove Crossfade" to { existing.forEach { ed.removeTransition(it.id) } })
                                         if (right.id != left.id) add("Select ${right.name.ifBlank { "Next Clip" }}" to { ed.proSelect(right.id) })
                                     },
+                                )
+                            },
+                            onTransition = { at, tr ->
+                                menu = ProMenu(
+                                    at + Offset(headerPx, tracksTop),
+                                    listOf(("Remove ${tr.name.ifBlank { "Crossfade" }}") to { ed.removeTransition(tr.id) }),
                                 )
                             },
                             onGap = { at, track, t ->
@@ -893,8 +900,10 @@ private fun Tracks(
     onAddMedia: (Offset, ProTrack, Long) -> Unit,
     onCut: (Offset, ProClip, ProClip) -> Unit,
     onGap: (Offset, ProTrack, Long) -> Unit,
+    onTransition: (Offset, ProTransition) -> Unit,
     modifier: Modifier,
 ) {
+    val transitionAt by rememberUpdatedState(onTransition)
     val cutAt by rememberUpdatedState(onCut)
     val gapAt by rememberUpdatedState(onGap)
     val measurer = rememberTextMeasurer()
@@ -1040,7 +1049,12 @@ private fun Tracks(
                                     val t = tAt(x)
                                     // empty space with a clip on each side
                                     val gap = row != null && hit == null && onRow.any { it.start + it.duration <= t } && onRow.any { it.start > t }
+                                    // a crossfade or fade band under the finger (whether or not it still sits on a cut)
+                                    val band = if (row == null) null else p0.transitions.firstOrNull { tr ->
+                                        tr.track == row.track.id && x >= xAt(tr.start) - 8.dp.toPx() && x <= xAt(tr.start + tr.duration) + 8.dp.toPx()
+                                    }
                                     when {
+                                        band != null && row?.track?.locked != true && (cut == null || band.from != cut.first.id) -> transitionAt(down.position, band)
                                         cut != null && row?.track?.locked != true -> cutAt(down.position, cut.first, cut.second)
                                         gap && row != null && !row.track.locked -> gapAt(down.position, row.track, t)
                                         else -> menuAt(down.position, hit)

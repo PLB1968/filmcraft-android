@@ -73,7 +73,7 @@ object ProHelpText {
         "goToOut" to ProHelp("Go to Out", "Moves the playhead to the Out point.", ""),
         "stepBack" to ProHelp("Step back one frame", "Moves the playhead back one frame.", "←"),
         "stepForward" to ProHelp("Step forward one frame", "Moves the playhead forward one frame.", "→"),
-        "play" to ProHelp("Play / Stop", "Plays from the playhead, or stops.", "Space (L plays, K stops, J plays backwards)"),
+        "play" to ProHelp("Play / Stop", "Plays from the playhead, or stops. The buttons on either side of the frame steps go to the selected clip's start or end (the cut before or after the playhead when nothing is selected); hold one to go to the start or end of the sequence.", "Space (L plays, K stops, J plays backwards)"),
         "prevMarker" to ProHelp("Go to previous marker", "Moves the playhead to the marker before it.", ""),
         "nextMarker" to ProHelp("Go to next marker", "Moves the playhead to the marker after it.", ""),
         "lift" to ProHelp("Lift", "Removes everything between In and Out on the targeted tracks and leaves a gap.", ";"),
