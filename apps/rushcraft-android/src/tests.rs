@@ -2087,4 +2087,103 @@ fn the_timeline_knows_each_crossfades_cut_and_alignment_for_dragging() {
     m.edit_transition(x.id, Some(x.duration * 2), None, None, false, true).unwrap();
     let z = m.pro_timeline().unwrap().transitions.into_iter().find(|z| z.id == x.id).unwrap();
     assert_eq!((z.start, z.duration, z.align.as_str()), (2 * SEC, x.duration * 2, "start"));
+    // anywhere over the cut, with Snap off: a quarter of the way in
+    let frame = SEC / 30;
+    let at = 2 * SEC - 10 * frame;
+    m.move_transition(x.id, at, 30 * frame).unwrap();
+    let w = m.pro_timeline().unwrap().transitions.into_iter().find(|w| w.id == x.id).unwrap();
+    assert_eq!((w.start, w.duration, w.align.as_str()), (at, 30 * frame, "custom"));
+}
+
+#[test]
+fn speed_ramps_slow_the_picture_and_mute_its_sound() {
+    let (m, _d, ids) = two_clips();
+    // the second clip runs 2 s to 5 s; a slow-motion hit in its middle
+    m.set_playhead(3 * SEC + SEC / 2);
+    let media_at = |m: &MobileSession, t: i64| {
+        let s = m.lock();
+        let (_, q) = model::sequence(&s).unwrap();
+        model::find(q, filmcraft_project::ClipId(ids[1])).unwrap().clip.source_time_at(filmcraft_time::Tick(t)).0
+    };
+    let before = media_at(&m, 3 * SEC + 3 * SEC / 5) - media_at(&m, 3 * SEC + 2 * SEC / 5);
+    assert!(m.speed_ramp(ids[1], motion::Ramp::SlowMoHit).unwrap(), "its sound is muted");
+    let during = media_at(&m, 3 * SEC + 3 * SEC / 5) - media_at(&m, 3 * SEC + 2 * SEC / 5);
+    assert!((during as f64) < before as f64 * 0.4, "{during} vs {before}");
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Speed Ramp"));
+    // the ramp is Time Remapping keyframes in Effect Controls, its speed read where it keys
+    let tr = fx(&m.effect_controls(ids[1]).unwrap(), "time_remap").clone();
+    let speed = prm(&tr, "speed");
+    assert_eq!(speed.keyframes.len(), 4);
+    assert!((speed.value[0] - 30.0).abs() < 1.0, "{:?}", speed.value);
+    // set there at 50 %: the keyframe at the playhead changes
+    m.set_effect_param(ids[1], tr.index, "speed".into(), vec![50.0], false, true).unwrap();
+    assert!((prm(fx(&m.effect_controls(ids[1]).unwrap(), "time_remap"), "speed").value[0] - 50.0).abs() < 1.0);
+    // gone again, with the sound back
+    assert!(!m.speed_ramp(ids[1], motion::Ramp::None).unwrap());
+    assert_eq!(media_at(&m, 3 * SEC + 3 * SEC / 5) - media_at(&m, 3 * SEC + 2 * SEC / 5), before);
+    let video = m.pro_timeline().unwrap().clips.into_iter().find(|c| c.id == ids[1]).unwrap();
+    let _ = video;
+    // the picture still draws along the ramp
+    m.speed_ramp(ids[1], motion::Ramp::RampOut).unwrap();
+    let r = m.renderer().unwrap();
+    for t in [2 * SEC, 3 * SEC, 5 * SEC - SEC / 30] {
+        assert!(r.frame(t, 160, true, None).is_ok());
+    }
+}
+
+#[test]
+fn masks_blur_show_only_and_limit_effects_and_green_screen_keys() {
+    let (m, _d, ids) = two_clips();
+    m.set_playhead(SEC);
+    let plain = m.renderer().unwrap().frame(SEC, 160, false, None).unwrap();
+    // a blurred ellipse in the middle: one undo step, drawn on the frame
+    let r = m.add_mask(ids[0], masks::MaskPurpose::Blur, masks::MaskShape::Ellipse, None).unwrap();
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Blur Area"));
+    let ms = m.clip_masks(ids[0]).unwrap();
+    assert_eq!(ms.len(), 1);
+    assert!(ms[0].outline.len() > 16 && (ms[0].x - 540.0).abs() < 2.0, "{:?}", ms[0]);
+    let blurred = m.renderer().unwrap().frame(SEC, 160, false, None).unwrap();
+    assert_ne!(plain.rgba, blurred.rgba);
+    // moved and grown on the monitor as one step
+    m.transform_mask(ids[0], r[0], r[1], 100.0, 0.0, 1.0, true).unwrap();
+    m.transform_mask(ids[0], r[0], r[1], 50.0, 0.0, 1.5, true).unwrap();
+    let moved = &m.clip_masks(ids[0]).unwrap()[0];
+    assert!((moved.x - 690.0).abs() < 3.0, "{moved:?}");
+    m.set_mask(ids[0], r[0], r[1], 10.0, 0.0, true, false).unwrap();
+    assert!(m.clip_masks(ids[0]).unwrap()[0].inverted);
+    // deleting it takes its blur too
+    m.remove_mask(ids[0], r[0], r[1]).unwrap();
+    assert!(m.clip_masks(ids[0]).unwrap().is_empty());
+    assert!(!m.effect_controls(ids[0]).unwrap().iter().any(|e| e.id == "gaussian_blur"));
+    // show only a rectangle; a mask on Lumetri
+    m.add_mask(ids[0], masks::MaskPurpose::ShowOnly, masks::MaskShape::Rectangle, None).unwrap();
+    m.ensure_lumetri(ids[1]).unwrap();
+    let lum = fx(&m.effect_controls(ids[1]).unwrap(), "lumetri").index;
+    m.add_mask(ids[1], masks::MaskPurpose::Effect, masks::MaskShape::Ellipse, Some(lum)).unwrap();
+    assert_eq!(m.clip_masks(ids[1]).unwrap()[0].label, "Lumetri Color");
+    // green screen on, then off
+    m.green_screen(ids[1], Some(0xff00_ff00), 0.6).unwrap();
+    let g = m.green_screen_of(ids[1]);
+    assert!(g.len() == 2 && (g[1] - 0.6).abs() < 1e-6, "{g:?}");
+    m.green_screen(ids[1], None, 0.0).unwrap();
+    assert!(m.green_screen_of(ids[1]).is_empty());
+}
+
+#[test]
+fn project_templates_lay_out_titles_and_markers_as_the_first_state() {
+    for st in [starters::Starter::Vlog, starters::Starter::Short, starters::Starter::Tutorial, starters::Starter::Square] {
+        let m = MobileSession::new();
+        let f = starter_frame(st);
+        m.new_project("T".into(), f[0], f[1], 30).unwrap();
+        m.apply_starter(st).unwrap();
+        let t = m.pro_timeline().unwrap();
+        assert!(t.clips.iter().filter(|c| c.kind == ClipKind::Text).count() >= 2, "{st:?}");
+        assert!(t.markers.len() >= 3, "{st:?}");
+        assert!(!m.poll().can_undo, "{st:?}: nothing to undo");
+    }
+    let m = MobileSession::new();
+    m.new_project("V".into(), 1920, 1080, 30).unwrap();
+    m.apply_starter(starters::Starter::Vlog).unwrap();
+    let lower = m.pro_timeline().unwrap().clips.into_iter().find(|c| c.start == 6 * SEC).expect("the lower third");
+    assert!(m.title_fields(lower.id).unwrap().iter().any(|f| f.value == "Your Name"));
 }

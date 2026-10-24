@@ -25,6 +25,7 @@ use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
 
 pub mod edits;
+pub mod masks;
 pub mod export;
 mod mediacodec;
 pub mod model;
@@ -37,6 +38,7 @@ pub mod render;
 pub mod renders;
 pub mod samples;
 pub mod speech;
+pub mod starters;
 pub mod text;
 pub mod titles;
 pub mod tools;
@@ -51,6 +53,13 @@ use speech::{CaptionLook, CaptionStatus, SpeechAudio, SpeechSettings};
 use text::{Placement, TextStyle};
 
 uniffi::setup_scaffolding!();
+
+/// The frame (width, height) a project template is made for.
+#[uniffi::export]
+pub fn starter_frame(starter: starters::Starter) -> Vec<u32> {
+    let (w, h) = starter.frame();
+    vec![w, h]
+}
 
 #[cfg(test)]
 mod tests;
@@ -917,6 +926,11 @@ impl MobileSession {
         self.pro_edit(|s| pro::edit_transition(s, transition, duration, align, reverse, merge, begin))
     }
 
+    /// Put a transition at `start` for `duration` (a free drag on the timeline, Snap off).
+    pub fn move_transition(&self, transition: u64, start: i64, duration: i64) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::move_transition(s, transition, start, duration))
+    }
+
     /// Set one of a transition's own settings.
     pub fn set_transition_param(&self, transition: u64, param: String, value: Vec<f64>, merge: bool, begin: bool) -> Result<(), MobileError> {
         self.pro_edit(|s| pro::set_transition_param(s, transition, &param, &value, merge, begin))
@@ -998,6 +1012,11 @@ impl MobileSession {
 
     // ---- titles and motion ----
 
+    /// Lay a project template's titles and guide markers on this (new, empty) project.
+    pub fn apply_starter(&self, starter: starters::Starter) -> Result<(), MobileError> {
+        starters::apply(&mut self.lock(), starter)
+    }
+
     /// The title templates (lower thirds, titles, end cards, credits, callouts).
     pub fn title_templates(&self) -> Result<Vec<titles::TitleTemplate>, MobileError> {
         titles::templates(&mut self.lock())
@@ -1041,6 +1060,56 @@ impl MobileSession {
     /// Start or stop keyframing a clip's motion by dragging it on the Program monitor.
     pub fn set_motion_recording(&self, clip: u64, on: bool) -> Result<(), MobileError> {
         self.pro_edit(|s| motion::set_recording(s, clip, on))
+    }
+
+    /// A speed ramp over a video clip (Time Remapping keyframes); returns whether its sound was
+    /// muted (sound can't follow a ramp).
+    pub fn speed_ramp(&self, clip: u64, ramp: motion::Ramp) -> Result<bool, MobileError> {
+        self.pro_edit(|s| motion::speed_ramp(s, clip, ramp))
+    }
+
+    // ---- masks and green screen ----
+
+    /// Add a mask (blur, show only, or limit an effect) in the middle of a clip's picture;
+    /// returns its effect index and mask index.
+    pub fn add_mask(&self, clip: u64, purpose: masks::MaskPurpose, shape: masks::MaskShape, effect: Option<u32>) -> Result<Vec<u32>, MobileError> {
+        self.pro_edit(|s| masks::add(s, clip, purpose, shape, effect).map(|(e, m)| vec![e, m]))
+    }
+
+    /// A clip's masks, as the Program monitor draws them.
+    pub fn clip_masks(&self, clip: u64) -> Result<Vec<masks::MaskInfo>, MobileError> {
+        masks::list(&self.lock(), clip)
+    }
+
+    /// Move a mask by frame pixels and scale it about its middle; `merge` folds a gesture.
+    #[allow(clippy::too_many_arguments)]
+    pub fn transform_mask(&self, clip: u64, effect: u32, mask: u32, dx: f64, dy: f64, scale: f64, merge: bool) -> Result<(), MobileError> {
+        masks::transform(&mut self.lock(), clip, effect, mask, dx, dy, scale, merge)
+    }
+
+    /// A mask's soft edge, growth and inversion.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_mask(&self, clip: u64, effect: u32, mask: u32, feather: f64, expansion: f64, inverted: bool, merge: bool) -> Result<(), MobileError> {
+        masks::set(&mut self.lock(), clip, effect, mask, feather, expansion, inverted, merge)
+    }
+
+    pub fn remove_mask(&self, clip: u64, effect: u32, mask: u32) -> Result<(), MobileError> {
+        self.pro_edit(|s| masks::remove(s, clip, effect, mask))
+    }
+
+    /// Track a mask from the playhead to the clip's end; returns the job to watch.
+    pub fn track_mask(&self, clip: u64, effect: u32, mask: u32) -> Result<u64, MobileError> {
+        masks::track(&mut self.lock(), clip, effect, mask)
+    }
+
+    /// Green screen: key out `color` (ARGB) with `strength` 0..1, or take it off (`None`).
+    pub fn green_screen(&self, clip: u64, color: Option<u32>, strength: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| masks::green_screen(s, clip, color, strength))
+    }
+
+    /// A clip's green screen colour and strength (empty when it has none).
+    pub fn green_screen_of(&self, clip: u64) -> Vec<f64> {
+        masks::green_screen_of(&self.lock(), clip).map(|(c, k)| vec![f64::from(c), k]).unwrap_or_default()
     }
 
     /// A clip's animated path on the frame.
@@ -1162,6 +1231,11 @@ impl MobileSession {
 
     pub fn remove_transition(&self, transition: u64) -> Result<(), MobileError> {
         self.pro_edit(|s| pro::remove_transition(s, transition))
+    }
+
+    /// Close every gap between clips on `track`; returns how many.
+    pub fn close_all_gaps(&self, track: u64) -> Result<u32, MobileError> {
+        self.pro_edit(|s| pro::close_all_gaps(s, track))
     }
 
     /// Close the gap on `track` at `time`.

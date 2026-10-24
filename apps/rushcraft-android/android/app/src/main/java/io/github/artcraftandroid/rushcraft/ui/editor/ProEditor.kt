@@ -148,6 +148,7 @@ fun ProEditor(ed: EditorController) {
             }
         }
         if (ed.showHistory) ed.history?.let { HistoryDialog(ed, it) }
+        if (ed.camera) CameraScreen(ed)
         ed.titleAt?.let { at -> TitleDialog(ed, at) }
         ed.busy?.let { text ->
             Box(Modifier.fillMaxSize().background(Fc.Scrim).clickable(enabled = true, onClick = {}), contentAlignment = Alignment.Center) {
@@ -168,7 +169,7 @@ private fun ProTopBar(ed: EditorController) {
     Row(Modifier.fillMaxWidth().height(FcSize.TopBar).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         HelpIconButton(ed, LucideIcons.House.glyph(), "Home", "home", "editor_home_button", iconSize = 24.dp) { ed.closeEditor() }
         Text(ed.project.name, style = FcType.Label, color = Fc.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-        HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = 24.dp) { ed.undo() }
+        HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo (hold for the history)", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = 24.dp, onLongClick = { ed.openHistory() }) { ed.undo() }
         HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = 24.dp) { ed.redo() }
         MoreMenu(ed)
         Box(
@@ -201,7 +202,9 @@ private fun MoreMenu(ed: EditorController) {
                 Triple("Colour…", ed.proSelection.isNotEmpty()) { ed.openColor() },
                 Triple("Titles…", true) { ed.panel = Panel.Titles },
                 Triple("Motion…", ed.proSelection.isNotEmpty()) { ed.openMotion() },
+                Triple("Masks & Green Screen…", ed.proSelection.isNotEmpty()) { ed.openMasks() },
                 Triple("Captions…", has) { ed.panel = Panel.Captions },
+                Triple("Record with Camera…", true) { ed.openCamera() },
                 Triple("Voice-over…", true) { ed.panel = Panel.Voiceover },
                 Triple("Text to Speech…", true) { ed.panel = Panel.Speech(null) },
                 Triple("Auto-Match Loudness", has) { ed.matchLoudness() },
@@ -407,11 +410,11 @@ private fun ProTransport(ed: EditorController) {
         TransportButton(ed, "markIn", ProGlyphs.MarkIn, "Mark In", "pro_program_mark_in", has) { ed.markIn() }
         TransportButton(ed, "markOut", ProGlyphs.MarkOut, "Mark Out", "pro_program_mark_out", has) { ed.markOut() }
         TransportButton(ed, "goToIn", ProGlyphs.GoToIn, "Go to In", "pro_program_go_to_in", ed.pro?.markIn != null) { ed.goToIn() }
-        JumpButton(ProGlyphs.GoToStart, "Go to previous cut; hold for the sequence start", "pro_program_go_to_start", has, { ed.goToCut(next = false) }) { ed.goToSequenceEdge(end = false) }
+        JumpButton(ProGlyphs.GoToStart, "Go to previous cut or marker; hold for the sequence start", "pro_program_go_to_start", has, { ed.goToCut(next = false) }) { ed.goToSequenceEdge(end = false) }
         TransportButton(ed, "stepBack", Glyphs.StepBack, "Step Back 1 Frame", "editor_previous_frame_button", has) { ed.step(-1) }
         TransportButton(ed, "play", if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Stop" else "Play", "editor_play_button", has) { ed.togglePlay() }
         TransportButton(ed, "stepForward", Glyphs.StepForward, "Step Forward 1 Frame", "editor_next_frame_button", has) { ed.step(1) }
-        JumpButton(ProGlyphs.GoToEnd, "Go to next cut; hold for the sequence end", "pro_program_go_to_end", has, { ed.goToCut(next = true) }) { ed.goToSequenceEdge(end = true) }
+        JumpButton(ProGlyphs.GoToEnd, "Go to next cut or marker; hold for the sequence end", "pro_program_go_to_end", has, { ed.goToCut(next = true) }) { ed.goToSequenceEdge(end = true) }
         TransportButton(ed, "goToOut", ProGlyphs.GoToOut, "Go to Out", "pro_program_go_to_out", ed.pro?.markOut != null) { ed.goToOut() }
         TransportButton(ed, "addMarker", ProGlyphs.Marker, "Add Marker", "pro_program_add_marker", has) { ed.addMarker() }
         TransportButton(ed, "prevMarker", LucideIcons.ChevronLeft.glyph(), "Go to Previous Marker", "pro_program_prev_marker", ed.pro?.markers?.isNotEmpty() == true) { ed.goToMarker(next = false) }

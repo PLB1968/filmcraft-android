@@ -41,7 +41,7 @@ data class ProHelp(val title: String, val text: String, val shortcut: String = "
 object ProHelpText {
     private val all: Map<String, ProHelp> = mapOf(
         // the tools
-        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it; tap its edge to pick it and trim a frame at a time. On a selected sound, drag the yellow volume line up or down (or its dots, the keyframes); long-press a sound to add a keyframe or to duck music under dialogue. Tap a crossfade or fade to edit it in Effect Controls (its type, length, alignment and settings); drag its edges to make it longer or shorter, or its middle to put it before, on or after the cut. (A crossfade blends two different pictures: on a razor cut through one continuous shot both sides show the same frames, so it can't be seen.) Long-press a clip, a cut or an empty spot for more.", "V"),
+        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it; tap its edge to pick it and trim a frame at a time. On a selected sound, drag the yellow volume line up or down (or its dots, the keyframes); long-press a sound to add a keyframe or to duck music under dialogue. Double-tap a title to edit its text, look and animation (or tap it on the Program monitor). Tap a crossfade or fade to edit it in Effect Controls (its type, length, alignment and settings); drag its edges to make it longer or shorter, or its middle to move it: with Snap on it lands before, on or after the cut, with Snap off exactly where you leave it. (A crossfade blends two different pictures: on a razor cut through one continuous shot both sides show the same frames, so it can't be seen.) Long-press a clip, a cut or an empty spot for more.", "V"),
         "tool.TrackSelectForward" to ProHelp("Track Select Forward tool", "Tap to select every clip on that track from the tap onward; long-press to select from there on every track. Drag to move them all together.", "A"),
         "tool.RippleEdit" to ProHelp("Ripple Edit tool", "Drag a clip's edge to trim it; the clips after it move along so no gap opens. Tap an edge to pick it and trim a frame at a time.", "B"),
         "tool.RollingEdit" to ProHelp("Rolling Edit tool", "Drag a cut between two clips to move it: one clip gets longer as the other gets shorter, and nothing else moves. Tap a cut to pick it and roll it a frame at a time.", "N"),
@@ -94,9 +94,9 @@ object ProHelpText {
         "sourceClose" to ProHelp("Close source", "Closes the clip in the Source monitor.", ""),
         "import" to ProHelp("Import", "Adds photos, videos or sounds to the Project panel without putting them on the timeline. Tap one to open it in the Source monitor.", ""),
         // the top bar
-        "more" to ProHelp("More", "Undo History, Aspect Ratio, Colour (the selected clip's Lumetri), Titles (lower thirds, titles, end cards and credits at the playhead, and the selected title's text and colours), Motion (the selected clip's entrance and exit, Ken Burns and picture-in-picture), Captions, Voice-over, Text to Speech, Auto-Match Loudness (the selected sounds, else all), Scene Edit Detection (cuts the selected video, else all, at each change of shot) and Beat Markers (on the selected music's beats).", ""),
+        "more" to ProHelp("More", "Undo History, Aspect Ratio, Colour (the selected clip's Lumetri), Masks & Green Screen (blur or show only an area, limit an effect to it, key out a green or blue backdrop), Record with Camera (straight onto the timeline at the playhead), Titles (lower thirds, titles, end cards and credits at the playhead, and the selected title's text and colours), Motion (the selected clip's entrance and exit, Ken Burns and picture-in-picture), Captions, Voice-over, Text to Speech, Auto-Match Loudness (the selected sounds, else all), Scene Edit Detection (cuts the selected video, else all, at each change of shot) and Beat Markers (on the selected music's beats).", ""),
         "home" to ProHelp("Home", "Saves and goes back to your projects.", ""),
-        "undo" to ProHelp("Undo", "Takes back the last change.", "Ctrl+Z"),
+        "undo" to ProHelp("Undo", "Takes back the last change. Hold it for the undo history: tap any step to go back to it.", "Ctrl+Z"),
         "redo" to ProHelp("Redo", "Puts back the last change you undid.", "Ctrl+Shift+Z"),
         "export" to ProHelp("Export", "Makes a video file of the sequence and saves it to your phone.", ""),
         // Effect Controls
@@ -127,23 +127,35 @@ internal fun Modifier.helpClick(
     enabled: Boolean = true,
     role: Role? = Role.Button,
     onDoubleClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ): Modifier =
     combinedClickable(
         role = role,
-        onLongClick = { ProHelpText.of(help)?.let { ed.help = it } },
+        onLongClick = onLongClick ?: { ProHelpText.of(help)?.let { ed.help = it } },
         onDoubleClick = onDoubleClick?.let { d -> { if (enabled) d() } },
         onClick = { if (enabled) onClick() },
     )
 
 /** A round icon button with long-press help (Pro mode's FcIconButton). */
 @Composable
-internal fun HelpIconButton(ed: EditorController, glyph: Glyph, description: String, help: String, tag: String, enabled: Boolean = true, size: Dp = 44.dp, iconSize: Dp = 22.dp, onClick: () -> Unit) {
+internal fun HelpIconButton(
+    ed: EditorController,
+    glyph: Glyph,
+    description: String,
+    help: String,
+    tag: String,
+    enabled: Boolean = true,
+    size: Dp = 44.dp,
+    iconSize: Dp = 22.dp,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Box(
         Modifier
             .size(size)
             .clip(CircleShape)
-            .helpClick(ed, help, enabled, onClick = onClick)
+            .helpClick(ed, help, enabled, onLongClick = onLongClick, onClick = onClick)
             .testTag(tag)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,

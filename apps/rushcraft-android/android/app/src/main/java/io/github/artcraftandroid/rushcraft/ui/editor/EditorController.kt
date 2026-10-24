@@ -125,6 +125,10 @@ sealed interface Panel {
     data object Titles : Panel
     /** Pro mode: the selected clip's entrance and exit, Ken Burns and picture-in-picture. */
     data object Motion : Panel
+    /** Pro mode: title [clip]'s text, style and animation. */
+    data class EditTitle(val clip: ULong) : Panel
+    /** Pro mode: the selected clip's masks and green screen. */
+    data object Masks : Panel
 }
 
 /** The tool bar's submenus. */
@@ -139,6 +143,8 @@ interface EditorHost {
     fun export()
     /** Ask for the microphone; [onGranted] runs once it may be used. */
     fun requestMicrophone(onGranted: () -> Unit)
+    /** Ask for the camera and microphone; [onGranted] runs once they may be used. */
+    fun requestCamera(onGranted: () -> Unit)
 }
 
 enum class PickKind { PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo }
@@ -791,6 +797,20 @@ class EditorController(
 
     fun setAspect(num: Int, den: Int) = edit { setAspect(num.toUInt(), den.toUInt()) }
 
+    /** A new project's template: its titles and guide markers. */
+    fun applyStarter(starter: io.github.artcraftandroid.rushcraft.core.Starter) {
+        scope.launch {
+            runCatching { engine.command { applyStarter(starter) } }.onFailure { host.tell(it.userMessage) }
+            refresh()
+            save()
+        }
+    }
+
+    /** After an export queue reframed the sequence and put it back: show it as it is. */
+    fun refreshAfterExport() {
+        scope.launch { refresh() }
+    }
+
     // ---- text ----
 
     fun addText(text: String) = edit { addText(text) }
@@ -915,6 +935,32 @@ class EditorController(
     private var voiceStart = 0L
 
     fun requestMicrophone(onGranted: () -> Unit) = host.requestMicrophone(onGranted)
+
+    // ---- the in-app camera ----
+
+    /** The camera screen is showing (record straight into the timeline). */
+    var camera by mutableStateOf(false)
+
+    fun openCamera() {
+        stop()
+        host.requestCamera { camera = true }
+    }
+
+    /** Where the next recording goes: the project's media folder. */
+    fun newRecordingFile(): java.io.File {
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+        return java.io.File(project.mediaDir.apply { mkdirs() }, "Camera $stamp.mp4")
+    }
+
+    /** A recording finished: it goes onto the timeline like imported media. */
+    fun addRecording(file: java.io.File) {
+        camera = false
+        if (!file.isFile || file.length() == 0L) return host.tell("Nothing was recorded.")
+        scope.launch {
+            runCatching { engine.command { addMedia(listOf(file.absolutePath)) } }.onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
 
     fun tellUser(message: String) = host.tell(message)
 
@@ -1274,6 +1320,17 @@ class EditorController(
     fun removeTransition(id: ULong) = edit { removeTransition(id) }
     fun closeGap(track: ULong, at: Long) = edit { closeGap(track, at) }
 
+    /** Close every gap between clips on [track]. */
+    fun closeAllGaps(track: ULong) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { closeAllGaps(track) } }
+                .onSuccess { n -> host.tell(if (n == 0u) "There are no gaps to close." else if (n == 1u) "1 gap closed." else "$n gaps closed.") }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
     /** Import files into the Project panel without putting them on the timeline. */
     fun importToBin(kind: PickKind) {
         host.pick(kind) { uris ->
@@ -1558,12 +1615,100 @@ class EditorController(
 
     fun kenBurns(clip: ULong, kind: KenBurns, amount: Double) = edit { kenBurns(clip, kind, amount) }
 
+    /** A speed ramp on video clip [clip]; its sound is muted while the ramp is on (it can't follow). */
+    fun speedRamp(clip: ULong, ramp: io.github.artcraftandroid.rushcraft.core.Ramp) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { speedRamp(clip, ramp) } }
+                .onSuccess { muted -> if (muted) host.tell("The clip's sound is muted while it ramps: sound can't follow a speed ramp.") }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
     fun pictureInPicture(clip: ULong, corner: Corner, size: Double) = edit { pictureInPicture(clip, corner, size) }
 
     /** Keyframe the clip's motion by dragging it on the Program monitor (or stop). */
     fun setMotionRecording(clip: ULong, on: Boolean) = edit { setMotionRecording(clip, on) }
 
     suspend fun motionPath(clip: ULong): MotionPath? = runCatching { engine.command { motionPath(clip) } }.getOrNull()
+
+    /** Edit Title for title clip [clip]: it becomes the selection. */
+    fun openTitleEditor(clip: ULong) {
+        stop()
+        proSelect(clip)
+        panel = Panel.EditTitle(clip)
+    }
+
+    /** Clip [id] as the timeline shows it, if it is still there. */
+    fun clipInfo(id: ULong): ClipInfo? = timeline?.lanes?.firstNotNullOfOrNull { l -> l.clips.firstOrNull { it.id == id } }
+
+    // ---- masks and green screen ----
+
+    /** The mask the Program monitor moves and sizes while the Masks panel is open. */
+    data class MaskRef(val clip: ULong, val effect: UInt, val mask: UInt)
+
+    var activeMask by mutableStateOf<MaskRef?>(null)
+
+    fun openMasks() {
+        val c = selectedClip
+        if (c == null || c.kind == ClipKind.AUDIO || c.kind == ClipKind.MISSING) return host.tell("Select a clip with a picture first.")
+        activeMask = null
+        panel = Panel.Masks
+    }
+
+    suspend fun clipMasks(clip: ULong): List<io.github.artcraftandroid.rushcraft.core.MaskInfo> =
+        runCatching { engine.command { clipMasks(clip) } }.getOrDefault(emptyList())
+
+    fun addMask(clip: ULong, purpose: io.github.artcraftandroid.rushcraft.core.MaskPurpose, shape: io.github.artcraftandroid.rushcraft.core.MaskShape, effect: UInt?) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { addMask(clip, purpose, shape, effect) } }
+                .onSuccess { r -> if (r.size == 2) activeMask = MaskRef(clip, r[0], r[1]) }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
+    /** Move the active mask by frame pixels and scale it (a gesture on the Program monitor). */
+    fun transformMask(m: MaskRef, dx: Double, dy: Double, scale: Double) = quickEdit { transformMask(m.clip, m.effect, m.mask, dx, dy, scale, true) }
+
+    fun setMask(m: MaskRef, feather: Double, expansion: Double, inverted: Boolean, merge: Boolean) =
+        quickEdit { setMask(m.clip, m.effect, m.mask, feather, expansion, inverted, merge) }
+
+    fun removeMask(m: MaskRef) {
+        if (activeMask == m) activeMask = null
+        edit { removeMask(m.clip, m.effect, m.mask) }
+    }
+
+    /** Follow what's under the mask to the clip's end, with its progress showing. */
+    fun trackMask(m: MaskRef) {
+        stop()
+        scope.launch {
+            val job = runCatching { engine.command { trackMask(m.clip, m.effect, m.mask) } }.onFailure { host.tell(it.userMessage) }.getOrNull() ?: return@launch
+            busy = "Tracking the mask…"
+            try {
+                while (true) {
+                    delay(400)
+                    val st = runCatching { engine.command { exportStatus(job) } }.getOrNull() ?: break
+                    busy = "Tracking the mask… ${(st.progress * 100).toInt()}%"
+                    if (st.finished) {
+                        st.error?.takeIf { it != "cancelled" }?.let { host.tell(it) }
+                        break
+                    }
+                }
+                refreshStatus()
+            } finally {
+                busy = null
+            }
+            refresh()
+        }
+    }
+
+    fun greenScreen(clip: ULong, color: UInt?, strength: Double) = edit { greenScreen(clip, color, strength) }
+
+    suspend fun greenScreenOf(clip: ULong): Pair<UInt, Double>? =
+        runCatching { engine.command { greenScreenOf(clip) } }.getOrNull()?.takeIf { it.size == 2 }?.let { it[0].toLong().toUInt() to it[1] }
 
     /** Open the Motion panel for the selected clip with a picture. */
     fun openMotion() {
@@ -1598,6 +1743,9 @@ class EditorController(
     fun editTransition(id: ULong, duration: Long? = null, align: String? = null, reverse: Boolean? = null, merge: Boolean = false, begin: Boolean = true) =
         quickEdit { editTransition(id, duration, align, reverse, merge, begin) }
 
+    /** Put a crossfade at [start] for [duration] ticks (a free drag on the timeline, Snap off). */
+    fun moveTransition(id: ULong, start: Long, duration: Long) = edit { moveTransition(id, start, duration) }
+
     fun setTransitionParam(id: ULong, p: ParamInfo, value: List<Double>, merge: Boolean, begin: Boolean) =
         quickEdit { setTransitionParam(id, p.id, value, merge, begin) }
 
@@ -1620,7 +1768,9 @@ class EditorController(
     fun goToCut(next: Boolean) {
         val p = pro ?: return
         val frame = TimelineMath.tickOfFrame(1, rateNum, rateDen)
-        val cuts = p.clips.flatMap { listOf(it.start, it.start + it.duration) }.distinct()
+        // cuts, clip ends and markers (a range marker's start and end)
+        val cuts = (p.clips.flatMap { listOf(it.start, it.start + it.duration) } +
+            p.markers.flatMap { m -> if (m.duration > 0) listOf(m.start, m.start + m.duration) else listOf(m.start) }).distinct()
         val t = (if (next) cuts.filter { it > playhead + frame / 2 }.minOrNull() else cuts.filter { it < playhead - frame / 2 }.maxOrNull()) ?: return
         seek(t.coerceAtLeast(0L), draft = false)
     }
