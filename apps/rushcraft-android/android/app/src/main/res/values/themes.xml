@@ -2,8 +2,8 @@
 <resources>
     <!-- the editor's dark surface, so nothing flashes before the first frame -->
     <color name="window_background">#FF000000</color>
-    <!-- FilmCraft's violet, the app icon's field (assets/app-icon/README.md) -->
-    <color name="ic_launcher_background">#FF8B5CF6</color>
+    <!-- twilight violet, the owl icon's field (docs/icon/owl.py) -->
+    <color name="ic_launcher_background">#FF4B3A8C</color>
 
     <style name="Theme.Rushcraft" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
