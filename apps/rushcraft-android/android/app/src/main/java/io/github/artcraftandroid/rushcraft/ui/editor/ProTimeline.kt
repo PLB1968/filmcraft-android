@@ -1217,9 +1217,17 @@ private fun Tracks(
                             ProTool.TrackSelectForward -> ed.proSelectForward(hitRow?.track?.id, tAt(x))
                             ProTool.Type -> ed.titleAt = frameAt(x)
                             else -> {
+                                // a tap on a crossfade or fade (Selection tool) picks it: Effect Controls shows it
+                                val band = if (ed.proTool == ProTool.Selection && hitRow != null) {
+                                    p0.transitions.firstOrNull { tr -> tr.track == hitRow.track.id && x >= xAt(tr.start) - 6.dp.toPx() && x <= xAt(tr.start + tr.duration) + 6.dp.toPx() }
+                                } else {
+                                    null
+                                }
                                 // a tap on a clip's end (with a tool that trims it) picks that end
-                                val d = if (hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
-                                if (d != null && (d.kind == DragKind.Trim || d.kind == DragKind.Ripple || d.kind == DragKind.Roll)) {
+                                val d = if (band == null && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
+                                if (band != null) {
+                                    ed.selectTransition(band.id)
+                                } else if (d != null && (d.kind == DragKind.Trim || d.kind == DragKind.Ripple || d.kind == DragKind.Roll)) {
                                     haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                     ed.pickedEdge = d.picked()
                                 } else {
@@ -1324,7 +1332,8 @@ private fun Tracks(
                 drawLine(PickedEdgeColor, Offset(x, top), Offset(x + lip, top), stroke)
                 drawLine(PickedEdgeColor, Offset(x, bottom), Offset(x + lip, bottom), stroke)
             }
-            // crossfades and fades: a light band with a diagonal, over the cut
+            // crossfades and fades: a light band over the cut, with their ramps and a keyframe at each
+            // end (a crossfade: the outgoing clip ramps down as the incoming one ramps up)
             for (tr in p.transitions) {
                 val r = rowOf[tr.track] ?: continue
                 val x0 = xOf(tr.start)
@@ -1332,8 +1341,22 @@ private fun Tracks(
                 if (x1 < 0f || x0 > w) continue
                 val top = r.top + 2.dp.toPx()
                 val bottom = r.bottom - 2.dp.toPx()
-                drawRect(Color.White.copy(alpha = 0.28f), Offset(x0, top), Size(max(2f, x1 - x0), bottom - top))
-                drawLine(Color.White.copy(alpha = 0.8f), Offset(x0, bottom), Offset(x1, top), 1.5.dp.toPx())
+                val picked = tr.id == ed.proTransition
+                drawRect(Color.White.copy(alpha = if (picked) 0.4f else 0.28f), Offset(x0, top), Size(max(2f, x1 - x0), bottom - top))
+                val ramp = Color.White.copy(alpha = 0.9f)
+                val dot = 3.5.dp.toPx()
+                // fading in (from nothing, or the incoming clip of a crossfade): up; fading out: down
+                if (tr.to != null) {
+                    drawLine(ramp, Offset(x0, bottom), Offset(x1, top), 1.5.dp.toPx())
+                    drawKeyframe(Offset(x0, bottom), "linear", ramp, radius = dot)
+                    drawKeyframe(Offset(x1, top), "linear", ramp, radius = dot)
+                }
+                if (tr.from != null) {
+                    drawLine(ramp, Offset(x0, top), Offset(x1, bottom), 1.5.dp.toPx())
+                    drawKeyframe(Offset(x0, top), "linear", ramp, radius = dot)
+                    drawKeyframe(Offset(x1, bottom), "linear", ramp, radius = dot)
+                }
+                if (picked) drawRect(Color.White, Offset(x0, top), Size(max(2f, x1 - x0), bottom - top), style = Stroke(2.dp.toPx()))
             }
             // locked tracks: hatched
             for (r in rows.filter { it.track.locked }) {

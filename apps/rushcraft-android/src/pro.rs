@@ -860,8 +860,26 @@ fn values_of(v: &filmcraft_project::ParamValue) -> Vec<f64> {
     }
 }
 
-fn effects_of(c: &TrackItem, at: Tick) -> Vec<EffectInfo> {
+/// How a parameter of `kind` is shown: its control, range, slider range, unit, decimals and choices.
+#[allow(clippy::type_complexity)]
+fn param_shape(kind: &filmcraft_project::ParamKind) -> (ParamType, f64, f64, f64, f64, String, u8, Vec<String>) {
     use filmcraft_project::ParamKind as K;
+    match kind {
+        K::Float { min, max, soft_min, soft_max, unit, decimals } => {
+            (ParamType::Number, *min, *max, *soft_min, *soft_max, (*unit).to_string(), *decimals, vec![])
+        }
+        K::Point => (ParamType::Point, f64::MIN, f64::MAX, 0.0, 0.0, String::new(), 1, vec![]),
+        K::Angle => (ParamType::Angle, -36_000.0, 36_000.0, -180.0, 180.0, "°".into(), 1, vec![]),
+        K::Bool => (ParamType::Toggle, 0.0, 1.0, 0.0, 1.0, String::new(), 0, vec![]),
+        K::Choice(opts) => {
+            (ParamType::Choice, 0.0, opts.len().saturating_sub(1) as f64, 0.0, 0.0, String::new(), 0, opts.iter().map(|o| (*o).to_string()).collect())
+        }
+        K::Color => (ParamType::Colour, 0.0, 1.0, 0.0, 1.0, String::new(), 2, vec![]),
+        _ => (ParamType::Other, 0.0, 0.0, 0.0, 0.0, String::new(), 0, vec![]),
+    }
+}
+
+fn effects_of(c: &TrackItem, at: Tick) -> Vec<EffectInfo> {
     let mt = c.effect_time_at(at.clamp(c.start, (c.end() - Tick(1)).max(c.start)));
     c.effects
         .iter()
@@ -878,26 +896,7 @@ fn effects_of(c: &TrackItem, at: Tick) -> Vec<EffectInfo> {
                 .map(|d| {
                     let prm = e.param(d.id);
                     let value = prm.map(|p| p.value_at(mt)).unwrap_or_else(|| d.default.clone());
-                    let (kind, min, max, soft_min, soft_max, unit, decimals, choices) = match &d.kind {
-                        K::Float { min, max, soft_min, soft_max, unit, decimals } => {
-                            (ParamType::Number, *min, *max, *soft_min, *soft_max, (*unit).to_string(), *decimals, vec![])
-                        }
-                        K::Point => (ParamType::Point, f64::MIN, f64::MAX, 0.0, 0.0, String::new(), 1, vec![]),
-                        K::Angle => (ParamType::Angle, -36_000.0, 36_000.0, -180.0, 180.0, "°".into(), 1, vec![]),
-                        K::Bool => (ParamType::Toggle, 0.0, 1.0, 0.0, 1.0, String::new(), 0, vec![]),
-                        K::Choice(opts) => (
-                            ParamType::Choice,
-                            0.0,
-                            opts.len().saturating_sub(1) as f64,
-                            0.0,
-                            0.0,
-                            String::new(),
-                            0,
-                            opts.iter().map(|o| (*o).to_string()).collect(),
-                        ),
-                        K::Color => (ParamType::Colour, 0.0, 1.0, 0.0, 1.0, String::new(), 2, vec![]),
-                        _ => (ParamType::Other, 0.0, 0.0, 0.0, 0.0, String::new(), 0, vec![]),
-                    };
+                    let (kind, min, max, soft_min, soft_max, unit, decimals, choices) = param_shape(&d.kind);
                     let keyframes = prm
                         .map(|p| {
                             p.keyframes
@@ -1235,6 +1234,187 @@ pub(crate) fn crossfade(s: &mut Session, left: u64, video: bool, audio: bool, se
         Ok(n)
     })?;
     Ok(n)
+}
+
+// ---- a transition in Effect Controls ----
+
+/// A transition type to switch to.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TransitionChoice {
+    pub id: String,
+    pub name: String,
+}
+
+/// A crossfade or fade as Effect Controls shows it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TransitionControls {
+    pub id: u64,
+    /// Its type (`cross_dissolve`, `constant_power`, …) and name.
+    pub effect: String,
+    pub name: String,
+    pub video: bool,
+    pub start: i64,
+    pub duration: i64,
+    /// "center", "start", "end" (on its cut) or "custom" (moved over it).
+    pub align: String,
+    pub reverse: bool,
+    /// The clips it goes between (one of them empty for a fade from or to nothing).
+    pub from: Option<u64>,
+    pub to: Option<u64>,
+    /// Its own settings (they don't animate).
+    pub params: Vec<ParamInfo>,
+    /// The types it can become (video or audio, as it is).
+    pub choices: Vec<TransitionChoice>,
+}
+
+fn find_transition(seq: &Sequence, id: u64) -> Option<(&Track, &filmcraft_project::Transition)> {
+    seq.video_tracks.iter().chain(&seq.audio_tracks).find_map(|t| t.transitions.iter().find(|x| x.id.0 == id).map(|x| (t, x)))
+}
+
+fn no_transition() -> MobileError {
+    MobileError::Command("That transition is no longer on the timeline.".into())
+}
+
+/// Effect Controls for transition `id`.
+pub(crate) fn transition_controls(s: &Session, id: u64) -> Result<TransitionControls, MobileError> {
+    use filmcraft_project::EffectKind;
+    let (_, seq) = model::sequence(s)?;
+    let (track, x) = find_transition(seq, id).ok_or_else(no_transition)?;
+    let def = x.effect.def().ok_or_else(|| MobileError::Command("That transition's type is unknown.".into()))?;
+    let video = track.kind == TrackKind::Video;
+    let frame = s.sequence_rate().frame_duration();
+    let align = filmcraft_edit::transitions::bounds(track, x).map_or("custom", |(_, cut, _)| filmcraft_edit::transitions::alignment(x, cut, frame).id());
+    let params = def
+        .params
+        .iter()
+        .map(|d| {
+            let value = x.effect.param(d.id).map(|p| p.value.clone()).unwrap_or_else(|| d.default.clone());
+            let (kind, min, max, soft_min, soft_max, unit, decimals, choices) = param_shape(&d.kind);
+            ParamInfo {
+                id: d.id.to_string(),
+                name: d.label.to_string(),
+                kind,
+                value: values_of(&value),
+                min,
+                max,
+                soft_min,
+                soft_max,
+                unit,
+                decimals,
+                choices,
+                animatable: false,
+                animated: false,
+                keyframes: Vec::new(),
+            }
+        })
+        .collect();
+    let want = if video { EffectKind::VideoTransition } else { EffectKind::AudioTransition };
+    let choices = filmcraft_project::effect_defs()
+        .iter()
+        .filter(|d| d.kind == want)
+        .map(|d| TransitionChoice { id: d.id.to_string(), name: d.name.to_string() })
+        .collect();
+    Ok(TransitionControls {
+        id,
+        effect: def.id.to_string(),
+        name: def.name.to_string(),
+        video,
+        start: x.start.0,
+        duration: x.duration.0,
+        align: align.to_string(),
+        reverse: x.reverse,
+        from: x.from.map(|c| c.0),
+        to: x.to.map(|c| c.0),
+        params,
+        choices,
+    })
+}
+
+/// Change transition `id`'s length (keeping its alignment), alignment on its cut, or Reverse.
+/// `merge` makes a drag one undo step, `begin` starts a new one.
+pub(crate) fn edit_transition(
+    s: &mut Session,
+    id: u64,
+    duration: Option<i64>,
+    align: Option<String>,
+    reverse: Option<bool>,
+    merge: bool,
+    begin: bool,
+) -> Result<(), MobileError> {
+    let mut p = json!({ "transition": id, "merge": merge, "begin": begin });
+    if let Some(d) = duration {
+        p["duration"] = json!(d);
+    }
+    if let Some(a) = align {
+        p["align"] = json!(a);
+    }
+    if let Some(r) = reverse {
+        p["reverse"] = json!(r);
+    }
+    ex(s, "sequence.setTransition", p)?;
+    Ok(())
+}
+
+/// Set one of transition `id`'s own settings.
+pub(crate) fn set_transition_param(s: &mut Session, id: u64, param: &str, value: &[f64], merge: bool, begin: bool) -> Result<(), MobileError> {
+    let kind = {
+        let (_, seq) = model::sequence(s)?;
+        let (_, x) = find_transition(seq, id).ok_or_else(no_transition)?;
+        x.effect.def().and_then(|d| d.param(param)).map(|d| d.kind.clone())
+    };
+    let v = param_json(kind.as_ref(), value)?;
+    ex(s, "sequence.setTransition", json!({ "transition": id, "params": { param: v }, "merge": merge, "begin": begin }))?;
+    Ok(())
+}
+
+/// Put transition `id`'s settings back to its type's defaults.
+pub(crate) fn reset_transition(s: &mut Session, id: u64) -> Result<(), MobileError> {
+    ex(s, "sequence.setTransition", json!({ "transition": id, "reset": true }))?;
+    Ok(())
+}
+
+/// Make transition `id` another type (`effect`), keeping where it sits and how long it is. One
+/// undo step; returns the new transition.
+pub(crate) fn change_transition(s: &mut Session, id: u64, effect: &str) -> Result<u64, MobileError> {
+    let (video, from, to, start, duration, align) = {
+        let (_, seq) = model::sequence(s)?;
+        let (track, x) = find_transition(seq, id).ok_or_else(no_transition)?;
+        let frame = s.sequence_rate().frame_duration();
+        let align = filmcraft_edit::transitions::bounds(track, x).map(|(_, cut, _)| filmcraft_edit::transitions::alignment(x, cut, frame));
+        (track.kind == TrackKind::Video, x.from, x.to, x.start, x.duration, align)
+    };
+    let frames = s.sequence_rate().frame_at(duration).max(1);
+    let r = s.edit_group("Change Transition", |s| {
+        s.execute("sequence.removeTransition", json!({ "transitions": [id] }))?;
+        let cmd = if video { "sequence.applyVideoTransition" } else { "sequence.applyAudioTransition" };
+        let at = match (from, to) {
+            (Some(f), _) => json!({ "clip": f.0, "edge": "out", "effect": effect, "frames": frames }),
+            (None, Some(t)) => json!({ "clip": t.0, "edge": "in", "effect": effect, "frames": frames }),
+            (None, None) => return Err(filmcraft_engine::EngineError::Other("That transition's clips are gone.".into())),
+        };
+        s.execute(cmd, at)?;
+        // the new one, where the old one was
+        let seq = s.active_sequence().ok_or(filmcraft_engine::EngineError::NoSequence)?;
+        let new = seq
+            .video_tracks
+            .iter()
+            .chain(&seq.audio_tracks)
+            .flat_map(|t| &t.transitions)
+            .find(|x| x.from == from && x.to == to)
+            .map(|x| (x.id.0, x.start))
+            .ok_or_else(|| filmcraft_engine::EngineError::Other("The new transition didn't go on.".into()))?;
+        match align {
+            Some(filmcraft_edit::transitions::Alignment::Custom) if new.1 != start => {
+                s.execute("sequence.setTransition", json!({ "transition": new.0, "start": start.0 }))?;
+            }
+            Some(a) if a != filmcraft_edit::transitions::Alignment::Custom => {
+                s.execute("sequence.setTransition", json!({ "transition": new.0, "align": a.id() }))?;
+            }
+            _ => {}
+        }
+        Ok(new.0)
+    })?;
+    Ok(r)
 }
 
 pub(crate) fn remove_transition(s: &mut Session, transition: u64) -> Result<(), MobileError> {

@@ -37,6 +37,7 @@ import io.github.artcraftandroid.rushcraft.core.SpeechSettings
 import io.github.artcraftandroid.rushcraft.core.TextStyle
 import io.github.artcraftandroid.rushcraft.core.TimelineInfo
 import io.github.artcraftandroid.rushcraft.core.TransitionInfo
+import io.github.artcraftandroid.rushcraft.core.TransitionControls
 import io.github.artcraftandroid.rushcraft.engine.AppPrefs
 import io.github.artcraftandroid.rushcraft.engine.Engine
 import io.github.artcraftandroid.rushcraft.engine.ProjectEntry
@@ -975,6 +976,7 @@ class EditorController(
     /** Select a clip (with its linked partners while Linked Selection is on), nothing for none; [add] toggles it. */
     fun proSelect(clip: ULong?, add: Boolean = false) {
         pickedEdge = null
+        proTransition = null
         submenu = Submenu.None
         selectedCaption = null
         quickEdit { selectClips(listOfNotNull(clip), add && clip != null) }
@@ -1412,6 +1414,48 @@ class EditorController(
     fun setInterpolation(e: EffectInfo, p: ParamInfo, k: KeyframeInfo, interpolation: String) =
         edit { setKeyframeInterpolation(e.clip, e.index, p.id, k.mediaTime, interpolation) }
     fun resetParam(e: EffectInfo, p: ParamInfo) = edit { resetEffectParam(e.clip, e.index, p.id) }
+
+    // ---- a transition in Effect Controls ----
+
+    /** The crossfade or fade picked on the timeline (Effect Controls shows it), else null. */
+    var proTransition by mutableStateOf<ULong?>(null)
+        private set
+    var transitionControls by mutableStateOf<TransitionControls?>(null)
+        private set
+
+    /** Pick a crossfade or fade (a tap on it): Effect Controls shows its settings. */
+    fun selectTransition(id: ULong) {
+        proSelect(null)
+        proTransition = id
+    }
+
+    /** Read the picked transition's settings (it may be gone after an edit). */
+    suspend fun loadTransition() {
+        val id = proTransition ?: return run { transitionControls = null }
+        val c = runCatching { engine.command { transitionControls(id) } }.getOrNull()
+        transitionControls = c
+        if (c == null) proTransition = null
+    }
+
+    /** Its length ([duration], ticks), alignment ("center", "start", "end") or Reverse. */
+    fun editTransition(id: ULong, duration: Long? = null, align: String? = null, reverse: Boolean? = null, merge: Boolean = false, begin: Boolean = true) =
+        quickEdit { editTransition(id, duration, align, reverse, merge, begin) }
+
+    fun setTransitionParam(id: ULong, p: ParamInfo, value: List<Double>, merge: Boolean, begin: Boolean) =
+        quickEdit { setTransitionParam(id, p.id, value, merge, begin) }
+
+    fun resetTransition(id: ULong) = edit { resetTransition(id) }
+
+    /** Make it another type, keeping its place and length; the new one stays picked. */
+    fun changeTransition(id: ULong, effect: String) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { changeTransition(id, effect) } }
+                .onSuccess { proTransition = it }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
     fun toggleEffect(e: EffectInfo) = edit { toggleEffect(e.clip, e.index) }
     fun removeEffect(e: EffectInfo) = edit { removeEffect(e.clip, e.index) }
 

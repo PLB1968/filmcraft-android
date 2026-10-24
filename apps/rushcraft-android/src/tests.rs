@@ -1788,3 +1788,46 @@ fn effects_render_to_previews_that_playback_then_shows() {
     m.set_effect(ids[0], e.id.clone(), 20.0, false, false).unwrap();
     assert!(m.render_bar().iter().any(|r| r.state != "green"));
 }
+
+#[test]
+fn a_crossfade_is_edited_like_any_effect_type_length_alignment_and_settings() {
+    let (m, _d, ids) = two_clips();
+    m.crossfade(ids[0], true, true, 0.5).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let v1 = t.video_tracks[0].id;
+    let tr = t.transitions.iter().find(|x| x.track == v1).expect("a video crossfade").id;
+    let c = m.transition_controls(tr).unwrap();
+    assert!(c.video && c.effect == "cross_dissolve" && c.align == "center", "{} {} {}", c.video, c.effect, c.align);
+    assert!(c.choices.iter().any(|x| x.id == "cross_dissolve") && c.choices.len() > 3, "{}", c.choices.len());
+    assert!(c.choices.iter().all(|x| x.id != "constant_power"), "video types only");
+    // length and alignment
+    m.edit_transition(tr, Some(SEC), None, None, false, false).unwrap();
+    let c = m.transition_controls(tr).unwrap();
+    assert_eq!((c.duration, c.align.as_str()), (SEC, "center"));
+    m.edit_transition(tr, None, Some("start".into()), None, false, false).unwrap();
+    let c = m.transition_controls(tr).unwrap();
+    assert_eq!((c.align.as_str(), c.start), ("start", 2 * SEC));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Edit Cross Dissolve"));
+    // another type keeps its place and length
+    let other = c.choices.iter().find(|x| x.id != "cross_dissolve").unwrap().id.clone();
+    let tr2 = m.change_transition(tr, other.clone()).unwrap();
+    let c = m.transition_controls(tr2).unwrap();
+    assert_eq!((c.effect.as_str(), c.duration, c.align.as_str()), (other.as_str(), SEC, "start"));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Change Transition"), "one step");
+    // a setting, then back to the defaults
+    if let Some(p) = c.params.iter().find(|p| p.kind == pro::ParamType::Number) {
+        let v = (p.value[0] + 1.0).min(p.max);
+        m.set_transition_param(tr2, p.id.clone(), vec![v], false, false).unwrap();
+        let after = m.transition_controls(tr2).unwrap();
+        assert!((after.params.iter().find(|q| q.id == p.id).unwrap().value[0] - v).abs() < 1e-6);
+        m.reset_transition(tr2).unwrap();
+        let reset = m.transition_controls(tr2).unwrap();
+        assert!((reset.params.iter().find(|q| q.id == p.id).unwrap().value[0] - p.value[0]).abs() < 1e-6);
+    }
+    // the audio crossfade offers the audio types
+    let a1 = t.audio_tracks[0].id;
+    let ta = m.pro_timeline().unwrap().transitions.iter().find(|x| x.track == a1).expect("an audio crossfade").id;
+    let c = m.transition_controls(ta).unwrap();
+    assert!(!c.video && c.choices.iter().any(|x| x.id == "constant_power"));
+    assert!(m.transition_controls(9_999_999).is_err());
+}
