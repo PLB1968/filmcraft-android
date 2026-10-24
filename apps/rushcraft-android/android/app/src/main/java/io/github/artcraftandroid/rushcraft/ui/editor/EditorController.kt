@@ -1520,6 +1520,13 @@ class EditorController(
         }
     }
 
+    /** The Colour panel closed on [clip]: a Lumetri Color it added and nothing changed comes off. */
+    fun tidyLumetri(clip: ULong) {
+        scope.launch {
+            runCatching { engine.command { tidyLumetri(clip) } }.onSuccess { if (it) refresh() }
+        }
+    }
+
     fun inputLuts(): List<Choice> = runCatching { session.inputLuts() }.getOrDefault(emptyList())
 
     fun setInputLut(clip: ULong, lut: String) = edit { setInputLut(clip, lut) }

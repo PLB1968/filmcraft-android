@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -46,6 +47,12 @@ fun ColorPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mod
     val video = pro?.videoTracks.orEmpty().map { it.id }.toSet()
     val clip = ed.proSelection.firstOrNull { it.track in video }
     LaunchedEffect(clip?.id, pro?.revision) { ed.loadEffects(clip?.id) }
+    // closed (or moved to another clip) without a change: the Lumetri it added comes off again,
+    // so the clip keeps the fast playback path
+    DisposableEffect(clip?.id) {
+        val id = clip?.id
+        onDispose { if (id != null) ed.tidyLumetri(id) }
+    }
     val lumetri: EffectInfo? = if (clip != null && ed.effectsClip == clip.id) ed.effects.firstOrNull { it.id == "lumetri" } else null
     ToolPanel("Colour", close, modifier, tag = "color_panel") {
         val pad = Modifier.padding(horizontal = FcSize.PanelPadding)

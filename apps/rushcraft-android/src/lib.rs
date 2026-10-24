@@ -350,6 +350,7 @@ impl MobileSession {
                 s.execute("sequence.open", json!({ "item": id }))?;
             }
         }
+        tools::drop_idle_lumetri(&mut s);
         model::timeline(&s)
     }
 
@@ -978,6 +979,11 @@ impl MobileSession {
     /// Give a video clip a Lumetri Color (for the Colour panel) when it has none.
     pub fn ensure_lumetri(&self, clip: u64) -> Result<(), MobileError> {
         self.pro_edit(|s| tools::ensure_lumetri(s, clip))
+    }
+
+    /// The Colour panel closed: an unchanged Lumetri Color it added comes off again.
+    pub fn tidy_lumetri(&self, clip: u64) -> Result<bool, MobileError> {
+        self.main_edit(|s| tools::tidy_lumetri(s, clip))
     }
 
     /// The Input LUTs offered: camera log to Rec. 709.

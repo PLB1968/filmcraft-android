@@ -1992,3 +1992,26 @@ fn titles_animations_ken_burns_picture_in_picture_and_keyframing_by_dragging() {
     m.set_motion_recording(ids[1], false).unwrap();
     assert!(m.motion_path(ids[1]).unwrap().path.is_empty());
 }
+
+#[test]
+fn a_lumetri_color_that_changes_nothing_comes_off_and_keeps_playback_fast() {
+    let (m, _d, ids) = two_clips();
+    let has = |m: &MobileSession| m.effect_controls(ids[0]).unwrap().iter().any(|e| e.id == "lumetri");
+    let steps = m.undo_history().undo.len();
+    // opened and closed without a change: gone, with its undo step
+    m.ensure_lumetri(ids[0]).unwrap();
+    assert!(has(&m));
+    assert!(m.tidy_lumetri(ids[0]).unwrap());
+    assert!(!has(&m));
+    assert_eq!(m.undo_history().undo.len(), steps);
+    // changed: it stays
+    m.ensure_lumetri(ids[0]).unwrap();
+    let e = fx(&m.effect_controls(ids[0]).unwrap(), "lumetri").clone();
+    m.set_effect_param(ids[0], e.index, "exposure".into(), vec![1.0], false, true).unwrap();
+    assert!(!m.tidy_lumetri(ids[0]).unwrap());
+    assert!(has(&m));
+    // one left behind by an older version comes off when the project is opened
+    m.set_effect_param(ids[0], e.index, "exposure".into(), vec![0.0], false, true).unwrap();
+    assert_eq!(tools::drop_idle_lumetri(&mut m.lock()), 1);
+    assert!(!has(&m));
+}

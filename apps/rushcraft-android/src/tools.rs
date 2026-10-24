@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use filmcraft_engine::Session;
-use filmcraft_project::{ClipId, TrackKind};
+use filmcraft_project::{ClipId, EffectInstance, ParamValue, TrackKind};
 use serde_json::json;
 
 use crate::MobileError;
@@ -169,8 +169,79 @@ pub(crate) fn ensure_lumetri(s: &mut Session, clip: u64) -> Result<(), MobileErr
     };
     if !has {
         ex(s, "effects.apply", json!({ "clips": [clip], "effect": "lumetri" }))?;
+        if let Some(e) = s.history.undo.last_mut() {
+            e.0 = ADD_LUMETRI.into();
+        }
     }
     Ok(())
+}
+
+/// The undo step of the Lumetri Color the Colour panel adds.
+const ADD_LUMETRI: &str = "Add Lumetri Color";
+
+/// A Lumetri Color that changes nothing: every setting as it came, nothing animated or masked.
+/// Even so it costs a full colour pass on every frame and the fast playback path, so it goes.
+fn idle_lumetri(e: &EffectInstance) -> bool {
+    e.effect == "lumetri"
+        && e.masks.is_empty()
+        && !e.is_animated()
+        && e.def().is_some_and(|d| {
+            d.params.iter().all(|p| {
+                e.params.get(p.id).is_none_or(|v| match (&v.value, &p.default) {
+                    (ParamValue::Vec2(_), ParamValue::Vec2(dd)) if dd.x.is_nan() => true,
+                    (a, b) => a == b,
+                })
+            })
+        })
+}
+
+/// The Colour panel closed on clip `clip`: a Lumetri Color it added and nothing changed comes off
+/// again (its undo step too, when it is the last one). Returns whether it did.
+pub(crate) fn tidy_lumetri(s: &mut Session, clip: u64) -> Result<bool, MobileError> {
+    let idle = {
+        let (_, seq) = model::sequence(s)?;
+        model::find(seq, ClipId(clip)).is_some_and(|f| f.clip.effects.iter().any(idle_lumetri))
+    };
+    if !idle {
+        return Ok(false);
+    }
+    if s.history.redo.is_empty() && s.history.undo.last().is_some_and(|e| e.0 == ADD_LUMETRI) {
+        s.undo();
+    } else {
+        s.edit_sequence("Remove Lumetri Color", |q, _, _| {
+            if let Some((_, c)) = q.find_item_mut(ClipId(clip)) {
+                c.effects.retain(|e| !idle_lumetri(e));
+            }
+            Ok(())
+        })?;
+    }
+    crate::edits::settle(s);
+    Ok(true)
+}
+
+/// Take every Lumetri Color that changes nothing off the project's clips, quietly (no undo step):
+/// projects from 0.0.12, where opening the Colour panel left one behind, play smoothly again.
+pub(crate) fn drop_idle_lumetri(s: &mut Session) -> usize {
+    let any = s.project.items.values().any(|i| {
+        i.as_sequence().is_some_and(|q| q.video_tracks.iter().flat_map(|t| &t.items).any(|c| c.effects.iter().any(idle_lumetri)))
+    });
+    if !any {
+        return 0;
+    }
+    let mut p = (*s.project).clone();
+    let mut n = 0;
+    for it in p.items.values_mut() {
+        let Some(q) = it.as_sequence_mut() else { continue };
+        for c in q.video_tracks.iter_mut().flat_map(|t| t.items.iter_mut()) {
+            let before = c.effects.len();
+            c.effects.retain(|e| !idle_lumetri(e));
+            n += before - c.effects.len();
+        }
+    }
+    s.project = Arc::new(p);
+    s.bump_view();
+    crate::edits::settle(s);
+    n
 }
 
 /// The LUTs the Colour panel offers: camera log to Rec. 709 (Input LUT).
