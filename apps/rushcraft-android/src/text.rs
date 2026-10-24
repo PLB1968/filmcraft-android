@@ -52,6 +52,9 @@ pub struct Placement {
     /// Scale (1.0 = as placed) and rotation (degrees, clockwise).
     pub scale: f64,
     pub rotation: f64,
+    /// The outline's corners on the frame (x, y of top left, top right, bottom right, bottom
+    /// left), as drawn.
+    pub corners: Vec<f64>,
 }
 
 fn hex(argb: u32) -> String {
@@ -378,9 +381,9 @@ pub(crate) fn placement(s: &mut Session, id: u64) -> Result<Placement, MobileErr
     let (scale, rotation) = (num(&l["scale"], 100.0) / 100.0, num(&l["rotation"], 0.0));
     // the letters themselves when they can be measured, so the outline hugs them
     if let Some((x, y, width, height)) = ink(s, id) {
-        return Ok(Placement { x, y, width, height, scale, rotation });
+        return Ok(Placement { x, y, width, height, scale, rotation, corners: Vec::new() });
     }
-    Ok(Placement { x: cx, y: cy, width: num(&lb[2], 0.0) - num(&lb[0], 0.0), height: num(&lb[3], 0.0) - num(&lb[1], 0.0), scale, rotation })
+    Ok(Placement { x: cx, y: cy, width: num(&lb[2], 0.0) - num(&lb[0], 0.0), height: num(&lb[3], 0.0) - num(&lb[1], 0.0), scale, rotation, corners: Vec::new() })
 }
 
 /// The text's lines as laid out (each from its first letter to its last, ascent to descent),

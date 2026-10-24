@@ -40,6 +40,12 @@ import io.github.artcraftandroid.rushcraft.core.TransitionInfo
 import io.github.artcraftandroid.rushcraft.core.TransitionControls
 import io.github.artcraftandroid.rushcraft.core.UndoHistory
 import io.github.artcraftandroid.rushcraft.core.Choice
+import io.github.artcraftandroid.rushcraft.core.Anim
+import io.github.artcraftandroid.rushcraft.core.Corner
+import io.github.artcraftandroid.rushcraft.core.KenBurns
+import io.github.artcraftandroid.rushcraft.core.MotionPath
+import io.github.artcraftandroid.rushcraft.core.TitleField
+import io.github.artcraftandroid.rushcraft.core.TitleTemplate
 import io.github.artcraftandroid.rushcraft.engine.AppPrefs
 import io.github.artcraftandroid.rushcraft.engine.Engine
 import io.github.artcraftandroid.rushcraft.engine.ProjectEntry
@@ -115,6 +121,10 @@ sealed interface Panel {
     data class Speech(val clip: ULong?) : Panel
     /** Pro mode's Colour panel (Lumetri) for the selected video clip. */
     data object Color : Panel
+    /** Pro mode: the title templates, and the selected title's fields. */
+    data object Titles : Panel
+    /** Pro mode: the selected clip's entrance and exit, Ken Burns and picture-in-picture. */
+    data object Motion : Panel
 }
 
 /** The tool bar's submenus. */
@@ -1513,6 +1523,47 @@ class EditorController(
     fun inputLuts(): List<Choice> = runCatching { session.inputLuts() }.getOrDefault(emptyList())
 
     fun setInputLut(clip: ULong, lut: String) = edit { setInputLut(clip, lut) }
+
+    // ---- titles and motion ----
+
+    fun titleTemplates(): List<TitleTemplate> = runCatching { session.titleTemplates() }.getOrDefault(emptyList())
+
+    /** A title template's preview, drawn off the main thread. */
+    suspend fun titleThumbnail(id: String, width: Int): ImageBitmap? = withContext(Dispatchers.Default) {
+        runCatching { session.titleThumbnail(id, width.toUInt()) }.getOrNull()?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+    }
+
+    /** Place a title template at the playhead (animated in and out); it becomes the selection. */
+    fun addTitleTemplate(id: String) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { addTitleTemplate(id) } }.onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
+    suspend fun titleFields(clip: ULong): List<TitleField> = runCatching { engine.command { titleFields(clip) } }.getOrDefault(emptyList())
+
+    /** Change a placed title's field; [merge] folds typing or a drag into one undo step. */
+    fun setTitleField(clip: ULong, field: String, value: String, merge: Boolean) = quickEdit { setTitleField(clip, field, value, merge) }
+
+    fun animateClip(clip: ULong, enter: Anim, exit: Anim, seconds: Double) = edit { animateClip(clip, enter, exit, seconds) }
+
+    fun kenBurns(clip: ULong, kind: KenBurns, amount: Double) = edit { kenBurns(clip, kind, amount) }
+
+    fun pictureInPicture(clip: ULong, corner: Corner, size: Double) = edit { pictureInPicture(clip, corner, size) }
+
+    /** Keyframe the clip's motion by dragging it on the Program monitor (or stop). */
+    fun setMotionRecording(clip: ULong, on: Boolean) = edit { setMotionRecording(clip, on) }
+
+    suspend fun motionPath(clip: ULong): MotionPath? = runCatching { engine.command { motionPath(clip) } }.getOrNull()
+
+    /** Open the Motion panel for the selected clip with a picture. */
+    fun openMotion() {
+        val c = selectedClip
+        if (c == null || c.kind == ClipKind.AUDIO || c.kind == ClipKind.MISSING) return host.tell("Select a clip with a picture first.")
+        panel = Panel.Motion
+    }
 
     // ---- a transition in Effect Controls ----
 

@@ -697,6 +697,43 @@ pub fn builtin_templates() -> Vec<GraphicsTemplate> {
         t.graphic.roll = Roll { mode: RollMode::CrawlLeft, start_off_screen: true, end_off_screen: true, ..Default::default() };
         v.push(t);
     }
+    // End card: a thank-you line over a bold call-to-action button and a small line under it.
+    {
+        let mut heading = text(1, "Heading", "Thanks for watching!", (960.0, 430.0), 96.0, "Bold");
+        set(&mut heading, "align", ParamValue::Choice(1));
+        let mut button = text(2, "Button", "SUBSCRIBE", (960.0, 640.0), 72.0, "Bold");
+        set(&mut button, "align", ParamValue::Choice(1));
+        set(&mut button, "tracking", ParamValue::Float(60.0));
+        set(&mut button, "fill_color", rgb(0xffffff));
+        set(&mut button, "background", ParamValue::Bool(true));
+        set(&mut button, "background_color", rgb(0xdc2626));
+        set(&mut button, "background_opacity", ParamValue::Float(100.0));
+        set(&mut button, "background_size", ParamValue::Float(34.0));
+        set(&mut button, "background_radius", ParamValue::Float(24.0));
+        set(&mut button, "shadow", ParamValue::Bool(true));
+        set(&mut button, "shadow_distance", ParamValue::Float(6.0));
+        set(&mut button, "shadow_blur", ParamValue::Float(24.0));
+        set(&mut button, "shadow_opacity", ParamValue::Float(45.0));
+        let mut sub = text(3, "Line", "Like  •  Share  •  Comment", (960.0, 800.0), 44.0, "Medium");
+        set(&mut sub, "align", ParamValue::Choice(1));
+        set(&mut sub, "fill_color", rgb(0xe5e7eb));
+        v.push(builtin(
+            "end-card-subscribe",
+            "End Card – Subscribe",
+            "End Cards",
+            "A thank-you line over a bold Subscribe button, for the end of a video.",
+            6,
+            vec![heading, button, sub],
+            vec![
+                ctl("heading", "Heading", 1, "text"),
+                ctl("button", "Button", 2, "text"),
+                ctl("line", "Line", 3, "text"),
+                ctl("button_color", "Button Color", 2, "background_color"),
+                ctl("heading_color", "Heading Color", 1, "fill_color"),
+                ctl("show_line", "Show Line", 3, "enabled"),
+            ],
+        ));
+    }
     v
 }
 

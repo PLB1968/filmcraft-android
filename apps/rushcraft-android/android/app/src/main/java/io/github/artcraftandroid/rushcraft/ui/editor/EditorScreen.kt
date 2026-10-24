@@ -63,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -78,6 +79,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.artcraftandroid.rushcraft.core.ClipKind
+import io.github.artcraftandroid.rushcraft.core.MotionPath
 import io.github.artcraftandroid.rushcraft.core.Placement
 import io.github.artcraftandroid.rushcraft.ui.Fc
 import io.github.artcraftandroid.rushcraft.ui.FcIconButton
@@ -299,8 +301,16 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
     val sel = ed.selectedClip
     val movable = sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput
     var placement by remember { mutableStateOf<Placement?>(null) }
-    LaunchedEffect(sel?.id, t?.revision) {
-        placement = if (movable && sel != null) ed.placementOf(sel.id) else null
+    // the placement as read (its outline's corners), which a gesture's changes are drawn from
+    var base by remember { mutableStateOf<Placement?>(null) }
+    var path by remember { mutableStateOf<MotionPath?>(null) }
+    // animated motion is read again wherever the playhead stops
+    val animated = path?.let { it.path.isNotEmpty() || it.recording } == true
+    LaunchedEffect(sel?.id, t?.revision, if (animated && !ed.playing) ed.playhead else 0L) {
+        val p = if (movable && sel != null) ed.placementOf(sel.id) else null
+        placement = p
+        base = p
+        path = if (movable && sel != null && ed.proMode) ed.motionPath(sel.id) else null
     }
     BoxWithConstraints(modifier.background(Fc.Black).testTag("editor_player_area"), contentAlignment = Alignment.Center) {
         val aspect = if (t != null && t.height.toInt() > 0) t.width.toFloat() / t.height.toFloat() else 9f / 16f
@@ -347,9 +357,9 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
                                     if (snapped != 0) haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                     snapState = snapped
                                 }
-                                val q = Placement(x = nx, y = ny, width = p.width, height = p.height, scale = ns, rotation = nr)
+                                val q = Placement(x = nx, y = ny, width = p.width, height = p.height, scale = ns, rotation = nr, corners = p.corners)
                                 placement = q
-                                p = Placement(x = p.x + pan.x / k, y = p.y + pan.y / k, width = p.width, height = p.height, scale = ns, rotation = p.rotation + rot)
+                                p = Placement(x = p.x + pan.x / k, y = p.y + pan.y / k, width = p.width, height = p.height, scale = ns, rotation = p.rotation + rot, corners = p.corners)
                                 ed.setPlacement(sel.id, q, merge = true)
                                 ev.changes.forEach { it.consume() }
                             } else if (moved) {
@@ -391,23 +401,70 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
             }
             val pl = placement
             if (movable && pl != null && t != null) {
+                val b0 = base
                 Canvas(Modifier.fillMaxSize()) {
                     val k = size.width / t.width.toFloat()
-                    val w = (pl.width * pl.scale * k).toFloat()
-                    val h = (pl.height * pl.scale * k).toFloat()
-                    val cx = (pl.x * k).toFloat()
-                    val cy = (pl.y * k).toFloat()
-                    val a = Math.toRadians(pl.rotation).toFloat()
-                    val corners = listOf(-w / 2 to -h / 2, w / 2 to -h / 2, w / 2 to h / 2, -w / 2 to h / 2).map { (x, y) ->
-                        Offset(cx + x * cos(a) - y * sin(a), cy + x * sin(a) + y * cos(a))
+                    // the motion path (where the middle of the picture goes) and its keyframes
+                    path?.takeIf { it.path.size >= 4 }?.let { mp ->
+                        val line = Path().apply {
+                            moveTo((mp.path[0] * k).toFloat(), (mp.path[1] * k).toFloat())
+                            for (i in 2 until mp.path.size - 1 step 2) lineTo((mp.path[i] * k).toFloat(), (mp.path[i + 1] * k).toFloat())
+                        }
+                        drawPath(line, Fc.AccentLight, style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()))))
+                        for (i in 0 until mp.keys.size - 1 step 2) {
+                            val c = Offset((mp.keys[i] * k).toFloat(), (mp.keys[i + 1] * k).toFloat())
+                            drawCircle(Color.Black, 5.dp.toPx(), c)
+                            drawCircle(Fc.AccentLight, 3.5.dp.toPx(), c)
+                        }
                     }
-                    val path = Path().apply {
+                    val corners = if (b0 != null && b0.corners.size == 8) {
+                        // the outline as read, moved, scaled and turned as the gesture has
+                        val a = Math.toRadians(pl.rotation - b0.rotation)
+                        val f = if (b0.scale != 0.0) pl.scale / b0.scale else 1.0
+                        (0 until 4).map { i ->
+                            val dx = b0.corners[2 * i] - b0.x
+                            val dy = b0.corners[2 * i + 1] - b0.y
+                            Offset(((pl.x + f * (dx * cos(a) - dy * sin(a))) * k).toFloat(), ((pl.y + f * (dx * sin(a) + dy * cos(a))) * k).toFloat())
+                        }
+                    } else {
+                        val w = (pl.width * pl.scale * k).toFloat()
+                        val h = (pl.height * pl.scale * k).toFloat()
+                        val cx = (pl.x * k).toFloat()
+                        val cy = (pl.y * k).toFloat()
+                        val a = Math.toRadians(pl.rotation).toFloat()
+                        listOf(-w / 2 to -h / 2, w / 2 to -h / 2, w / 2 to h / 2, -w / 2 to h / 2).map { (x, y) ->
+                            Offset(cx + x * cos(a) - y * sin(a), cy + x * sin(a) + y * cos(a))
+                        }
+                    }
+                    val outline = Path().apply {
                         moveTo(corners[0].x, corners[0].y)
                         for (c in corners.drop(1)) lineTo(c.x, c.y)
                         close()
                     }
-                    drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
+                    drawPath(outline, Color.White, style = Stroke(2.dp.toPx()))
                 }
+            }
+        }
+        // Pro mode: keyframe the selected clip's motion by dragging it (the stopwatch for
+        // position, scale and rotation together)
+        val rec = path?.recording == true
+        if (ed.proMode && movable && sel != null && t != null && placement != null) {
+            Row(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .height(32.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (rec) Color(0xFFDC2626) else Color.Black.copy(alpha = 0.6f))
+                    .clickable(role = Role.Switch) { ed.setMotionRecording(sel.id, !rec) }
+                    .semantics { contentDescription = if (rec) "Stop keyframing motion" else "Keyframe motion by dragging" }
+                    .testTag("monitor_keyframe_motion")
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(if (rec) Color.White else Color(0xFFDC2626)))
+                Spacer(Modifier.width(6.dp))
+                Text(if (rec) "Keyframing" else "Keyframe", style = FcType.Caption, color = Color.White)
             }
         }
     }

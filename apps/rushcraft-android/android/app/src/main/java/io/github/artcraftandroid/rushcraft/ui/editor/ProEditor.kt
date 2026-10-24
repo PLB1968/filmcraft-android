@@ -199,6 +199,8 @@ private fun MoreMenu(ed: EditorController) {
                 Triple("Undo History…", ed.status?.canUndo == true || ed.status?.canRedo == true) { ed.openHistory() },
                 Triple("Aspect Ratio…", true) { ed.panel = Panel.AspectRatio },
                 Triple("Colour…", ed.proSelection.isNotEmpty()) { ed.openColor() },
+                Triple("Titles…", true) { ed.panel = Panel.Titles },
+                Triple("Motion…", ed.proSelection.isNotEmpty()) { ed.openMotion() },
                 Triple("Captions…", has) { ed.panel = Panel.Captions },
                 Triple("Voice-over…", true) { ed.panel = Panel.Voiceover },
                 Triple("Text to Speech…", true) { ed.panel = Panel.Speech(null) },

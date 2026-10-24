@@ -28,6 +28,7 @@ pub mod edits;
 pub mod export;
 mod mediacodec;
 pub mod model;
+pub mod motion;
 pub mod placement;
 pub mod presets;
 pub mod pro;
@@ -37,6 +38,7 @@ pub mod renders;
 pub mod samples;
 pub mod speech;
 pub mod text;
+pub mod titles;
 pub mod tools;
 
 use export::{ExportPlan, ExportSettings, ExportStatus};
@@ -986,6 +988,58 @@ impl MobileSession {
     /// Set a video clip's Input LUT (empty: none).
     pub fn set_input_lut(&self, clip: u64, lut: String) -> Result<(), MobileError> {
         self.pro_edit(|s| tools::set_input_lut(s, clip, &lut))
+    }
+
+    // ---- titles and motion ----
+
+    /// The title templates (lower thirds, titles, end cards, credits, callouts).
+    pub fn title_templates(&self) -> Result<Vec<titles::TitleTemplate>, MobileError> {
+        titles::templates(&mut self.lock())
+    }
+
+    /// A title template drawn `width` pixels wide, as a PNG.
+    pub fn title_thumbnail(&self, id: String, width: u32) -> Result<Vec<u8>, MobileError> {
+        titles::thumbnail(&mut self.lock(), &id, width)
+    }
+
+    /// Place a title template at the playhead, animated in and out; returns the clip.
+    pub fn add_title_template(&self, id: String) -> Result<u64, MobileError> {
+        self.pro_edit(|s| titles::add(s, &id))
+    }
+
+    /// A placed title's editable fields (empty for other clips).
+    pub fn title_fields(&self, clip: u64) -> Result<Vec<titles::TitleField>, MobileError> {
+        titles::fields(&mut self.lock(), clip)
+    }
+
+    /// Change a placed title's field; `merge` folds typing or a drag into one undo step.
+    pub fn set_title_field(&self, clip: u64, field: String, value: String, merge: bool) -> Result<(), MobileError> {
+        self.pro_edit(|s| titles::set_field(s, clip, &field, &value, merge))
+    }
+
+    /// Give a clip an entrance and an exit, each `seconds` long.
+    pub fn animate_clip(&self, clip: u64, enter: motion::Anim, exit: motion::Anim, seconds: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::animate(s, clip, enter, exit, seconds))
+    }
+
+    /// Ken Burns: a slow zoom or pan over the whole clip; `amount` 0.05 to 0.5.
+    pub fn ken_burns(&self, clip: u64, kind: motion::KenBurns, amount: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::ken_burns(s, clip, kind, amount))
+    }
+
+    /// Picture-in-picture: the clip at `size` × the frame's width in a corner.
+    pub fn picture_in_picture(&self, clip: u64, corner: motion::Corner, size: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::picture_in_picture(s, clip, corner, size))
+    }
+
+    /// Start or stop keyframing a clip's motion by dragging it on the Program monitor.
+    pub fn set_motion_recording(&self, clip: u64, on: bool) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::set_recording(s, clip, on))
+    }
+
+    /// A clip's animated path on the frame.
+    pub fn motion_path(&self, clip: u64) -> Result<motion::MotionPath, MobileError> {
+        motion::path(&self.lock(), clip)
     }
 
     // ---- render previews ----
