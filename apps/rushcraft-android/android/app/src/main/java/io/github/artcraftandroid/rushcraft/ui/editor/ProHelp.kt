@@ -129,13 +129,15 @@ internal fun Modifier.helpClick(
     onDoubleClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
-): Modifier =
-    combinedClickable(
+): Modifier {
+    val showHelp: () -> Unit = { ProHelpText.of(help)?.let { ed.help = it } }
+    return combinedClickable(
         role = role,
-        onLongClick = onLongClick ?: { ProHelpText.of(help)?.let { ed.help = it } },
+        onLongClick = onLongClick ?: showHelp,
         onDoubleClick = onDoubleClick?.let { d -> { if (enabled) d() } },
         onClick = { if (enabled) onClick() },
     )
+}
 
 /** A round icon button with long-press help (Pro mode's FcIconButton). */
 @Composable
