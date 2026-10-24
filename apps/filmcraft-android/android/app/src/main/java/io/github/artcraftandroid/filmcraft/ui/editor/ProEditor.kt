@@ -370,12 +370,21 @@ private fun ProTransport(ed: EditorController) {
                 else -> 1f
             }
         }
+        // a proxy being made: how far along, and how many wait (tap for the Project panel)
+        val px = ed.proxies
+        val making = px?.making
+        if (px != null && making != null) {
+            val more = if (px.waiting.isNotEmpty()) " · ${px.waiting.size} more" else ""
+            TextButton44(ed, "proxyProgress", "Proxy ${(px.progress * 100).toInt()}%$more", "pro_program_proxy_progress", true) {
+                if (ed.proDesktop) ed.proSideTab = 1 else ed.proTab = 3
+            }
+        }
     }
 }
 
 /**
- * Go to start / end: a tap goes to the selected clip's start or end (the cut before or after the
- * playhead when nothing is selected); holding goes to the sequence's start or end. Its hold jumps
+ * Go to start / end: a tap goes to the cut before or after the playhead; holding goes to the
+ * sequence's start or end. Its hold jumps
  * rather than explaining it: the Play button's help covers it.
  */
 @OptIn(ExperimentalFoundationApi::class)

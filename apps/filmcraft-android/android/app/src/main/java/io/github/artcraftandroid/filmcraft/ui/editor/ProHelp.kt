@@ -80,6 +80,7 @@ object ProHelpText {
         "extract" to ProHelp("Extract", "Removes everything between In and Out on the targeted tracks and closes the gap.", "'"),
         "safeMargins" to ProHelp("Safe Margins", "Shows the action-safe (90%) and title-safe (80%) frames, to keep important things away from the edges.", ""),
         "proxies" to ProHelp("Toggle Proxies", "When on, the monitors play the small proxy copies of your videos, so playback is smooth. Exports always use the originals. Proxies of HD and 4K videos are made in the background (Settings › Proxies); long-press a video in the Project panel to make or remove one.", ""),
+        "proxyProgress" to ProHelp("Making proxies", "A proxy (a small copy for smooth playback) is being made: how far along it is, and how many videos wait their turn. It plays smoothly once it's done. Tap to see them in the Project panel.", ""),
         "resolution" to ProHelp("Playback resolution", "Draws the picture at Full, 1/2 or 1/4 size while playing and scrubbing, so it runs smoothly. It's sharp again when you stop.", ""),
         "sourceMarkIn" to ProHelp("Mark source In", "Sets where the part of the source clip you want starts.", "I"),
         "sourceMarkOut" to ProHelp("Mark source Out", "Sets the last frame of the part of the source clip you want.", "O"),

@@ -1640,6 +1640,9 @@ fn proxies_are_made_one_at_a_time_and_attached_without_an_undo_step() {
     // the monitors play the proxy; the picture is still the whole frame
     m.set_use_proxies(true);
     assert!(m.proxy_tick(false).enabled);
+    // and still do after a save (which notes the project as recent and so sets the preferences)
+    m.save_project(d.join("p.fcproj").to_string_lossy().into_owned()).unwrap();
+    assert!(m.proxy_tick(false).enabled, "a save keeps proxies on");
     let f = m.renderer().unwrap().frame(SEC / 2, 360, true, None).unwrap();
     assert!(f.width > 0 && f.height > 0);
     // removed by hand: its file goes, and it isn't made again on its own

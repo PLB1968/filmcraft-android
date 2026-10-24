@@ -237,6 +237,9 @@ fn cancel(s: &Session, job: u64) {
 
 /// Toggle Proxies: the monitors play proxies where there are some (or the originals).
 pub(crate) fn set_enabled(s: &mut Session, on: bool) {
+    // kept in the preferences too: the engine sets the pool from them whenever they change (a
+    // save notes the project as recent), which would turn proxies back off
+    s.prefs.media.enable_proxies = on;
     if s.media.use_proxies() != on {
         s.media.set_use_proxies(on);
         s.bump_view();
