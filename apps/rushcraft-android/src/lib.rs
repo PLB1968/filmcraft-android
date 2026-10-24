@@ -33,6 +33,7 @@ pub mod presets;
 pub mod pro;
 pub mod proxy;
 pub mod render;
+pub mod renders;
 pub mod samples;
 pub mod speech;
 pub mod text;
@@ -889,6 +890,55 @@ impl MobileSession {
         // kept in the preferences too, which the engine applies whenever they change
         s.prefs.playback.hardware_decoding = if on { "auto" } else { "off" }.into();
         mediacodec::set_enabled(on);
+    }
+
+    // ---- a transition in Effect Controls ----
+
+    /// Effect Controls for a crossfade or fade: its type, length, alignment and settings.
+    pub fn transition_controls(&self, transition: u64) -> Result<pro::TransitionControls, MobileError> {
+        pro::transition_controls(&self.lock(), transition)
+    }
+
+    /// Change a transition's length (keeping its alignment), alignment ("center", "start",
+    /// "end") or Reverse; `merge` makes a drag one undo step, `begin` starts a new one.
+    pub fn edit_transition(
+        &self,
+        transition: u64,
+        duration: Option<i64>,
+        align: Option<String>,
+        reverse: Option<bool>,
+        merge: bool,
+        begin: bool,
+    ) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::edit_transition(s, transition, duration, align, reverse, merge, begin))
+    }
+
+    /// Set one of a transition's own settings.
+    pub fn set_transition_param(&self, transition: u64, param: String, value: Vec<f64>, merge: bool, begin: bool) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::set_transition_param(s, transition, &param, &value, merge, begin))
+    }
+
+    /// Put a transition's settings back to its type's defaults.
+    pub fn reset_transition(&self, transition: u64) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::reset_transition(s, transition))
+    }
+
+    /// Make a transition another type, keeping its place and length; returns the new one.
+    pub fn change_transition(&self, transition: u64, effect: String) -> Result<u64, MobileError> {
+        self.pro_edit(|s| pro::change_transition(s, transition, &effect))
+    }
+
+    // ---- render previews ----
+
+    /// The render bar: stretches to render (yellow, red) and rendered ones (green).
+    pub fn render_bar(&self) -> Vec<renders::RenderSpan> {
+        renders::render_bar(&self.lock())
+    }
+
+    /// Render the effects of every stretch not rendered yet (in the background); returns the job
+    /// to watch with [`MobileSession::export_status`], or nothing when all is rendered.
+    pub fn render_effects(&self) -> Result<Option<u64>, MobileError> {
+        renders::start(&mut self.lock())
     }
 
     /// Toggle Proxies: the monitors play the proxies (on) or the originals. Exports always use

@@ -29,6 +29,7 @@ import io.github.artcraftandroid.rushcraft.core.ProTimeline
 import io.github.artcraftandroid.rushcraft.core.ProxyStatus
 import io.github.artcraftandroid.rushcraft.core.TrackSwitches
 import io.github.artcraftandroid.rushcraft.core.Renderer
+import io.github.artcraftandroid.rushcraft.core.RenderSpan
 import io.github.artcraftandroid.rushcraft.core.SessionStatus
 import io.github.artcraftandroid.rushcraft.core.SourceInfo
 import io.github.artcraftandroid.rushcraft.core.SpeechAudio
@@ -36,6 +37,7 @@ import io.github.artcraftandroid.rushcraft.core.SpeechSettings
 import io.github.artcraftandroid.rushcraft.core.TextStyle
 import io.github.artcraftandroid.rushcraft.core.TimelineInfo
 import io.github.artcraftandroid.rushcraft.core.TransitionInfo
+import io.github.artcraftandroid.rushcraft.core.TransitionControls
 import io.github.artcraftandroid.rushcraft.engine.AppPrefs
 import io.github.artcraftandroid.rushcraft.engine.Engine
 import io.github.artcraftandroid.rushcraft.engine.ProjectEntry
@@ -297,6 +299,72 @@ class EditorController(
         }
         requestFrame(playhead, draft = false)
         watchProxies()
+        if (changed) renderSoon()
+    }
+
+    // ---- render previews ----
+
+    /** The render bar: stretches with effects to render (yellow, red) and rendered ones (green). */
+    var renderBar by mutableStateOf<List<RenderSpan>>(emptyList())
+        private set
+    /** How far rendering has got (0..1) while it runs, else null. */
+    var renderProgress by mutableStateOf<Double?>(null)
+        private set
+    private var renderLoop: Job? = null
+    private var renderJob: ULong? = null
+
+    /** After an edit: render what it changed once editing pauses (Settings › Render effects). */
+    private fun renderSoon() {
+        stopRendering()
+        if (closed || prefs?.autoRender == false) return
+        renderLoop = scope.launch {
+            delay(3000)
+            if (!playing) renderNow()
+        }
+    }
+
+    /** Render the stretches that need it now (the Render button), showing how far it has got. */
+    fun renderEffects() {
+        stopRendering()
+        renderLoop = scope.launch { renderNow(tell = true) }
+    }
+
+    private suspend fun renderNow(tell: Boolean = false) {
+        val job = runCatching { engine.command { renderEffects() } }.onFailure { if (tell) host.tell(it.userMessage) }.getOrNull()
+        if (job == null) {
+            if (tell) host.tell("Everything is rendered.")
+            return
+        }
+        renderJob = job
+        renderProgress = 0.0
+        try {
+            while (true) {
+                delay(700)
+                val st = runCatching { engine.command { exportStatus(job) } }.getOrNull() ?: break
+                renderProgress = st.progress
+                if (st.finished) {
+                    st.error?.takeIf { tell && it != "cancelled" }?.let { host.tell("Rendering stopped: $it") }
+                    break
+                }
+            }
+        } finally {
+            renderJob = null
+            renderProgress = null
+        }
+        renderBar = runCatching { engine.command { renderBar() } }.getOrDefault(renderBar)
+        requestFrame(playhead, draft = false)
+    }
+
+    /** The Render button while it renders: stop (what was rendered so far is kept). */
+    fun stopRender() = stopRendering()
+
+    /** Stop rendering (an edit, playback, leaving): what was rendered so far is kept. */
+    private fun stopRendering() {
+        renderLoop?.cancel()
+        renderLoop = null
+        renderJob?.let { j -> scope.launch { runCatching { engine.command { cancelExport(j) } } } }
+        renderJob = null
+        renderProgress = null
     }
 
     // ---- proxies ----
@@ -375,6 +443,7 @@ class EditorController(
 
     private suspend fun refreshPro() {
         pro = runCatching { engine.command { proTimeline() } }.getOrNull()
+        renderBar = runCatching { engine.command { renderBar() } }.getOrDefault(emptyList())
         bin = runCatching { engine.command { projectBin() } }.getOrDefault(emptyList())
         source = runCatching { engine.command { sourceInfo() } }.getOrNull()
         if (source == null) sourcePicture = null
@@ -419,6 +488,7 @@ class EditorController(
     suspend fun close() {
         stop()
         closed = true
+        stopRendering()
         proxyLoop?.cancel()
         proxyMaker?.cancel()
         runCatching { engine.command { stopProxies() } }
@@ -508,6 +578,8 @@ class EditorController(
 
     fun play() {
         pickedEdge = null
+        // rendering would take the processor playback needs; it starts again after the next edit
+        if (renderJob != null || renderLoop != null) stopRendering()
         val end = duration
         if (end <= 0) return
         if (playhead >= end - frameTicks) playhead = 0
@@ -904,6 +976,7 @@ class EditorController(
     /** Select a clip (with its linked partners while Linked Selection is on), nothing for none; [add] toggles it. */
     fun proSelect(clip: ULong?, add: Boolean = false) {
         pickedEdge = null
+        proTransition = null
         submenu = Submenu.None
         selectedCaption = null
         quickEdit { selectClips(listOfNotNull(clip), add && clip != null) }
@@ -1341,6 +1414,48 @@ class EditorController(
     fun setInterpolation(e: EffectInfo, p: ParamInfo, k: KeyframeInfo, interpolation: String) =
         edit { setKeyframeInterpolation(e.clip, e.index, p.id, k.mediaTime, interpolation) }
     fun resetParam(e: EffectInfo, p: ParamInfo) = edit { resetEffectParam(e.clip, e.index, p.id) }
+
+    // ---- a transition in Effect Controls ----
+
+    /** The crossfade or fade picked on the timeline (Effect Controls shows it), else null. */
+    var proTransition by mutableStateOf<ULong?>(null)
+        private set
+    var transitionControls by mutableStateOf<TransitionControls?>(null)
+        private set
+
+    /** Pick a crossfade or fade (a tap on it): Effect Controls shows its settings. */
+    fun selectTransition(id: ULong) {
+        proSelect(null)
+        proTransition = id
+    }
+
+    /** Read the picked transition's settings (it may be gone after an edit). */
+    suspend fun loadTransition() {
+        val id = proTransition ?: return run { transitionControls = null }
+        val c = runCatching { engine.command { transitionControls(id) } }.getOrNull()
+        transitionControls = c
+        if (c == null) proTransition = null
+    }
+
+    /** Its length ([duration], ticks), alignment ("center", "start", "end") or Reverse. */
+    fun editTransition(id: ULong, duration: Long? = null, align: String? = null, reverse: Boolean? = null, merge: Boolean = false, begin: Boolean = true) =
+        quickEdit { editTransition(id, duration, align, reverse, merge, begin) }
+
+    fun setTransitionParam(id: ULong, p: ParamInfo, value: List<Double>, merge: Boolean, begin: Boolean) =
+        quickEdit { setTransitionParam(id, p.id, value, merge, begin) }
+
+    fun resetTransition(id: ULong) = edit { resetTransition(id) }
+
+    /** Make it another type, keeping its place and length; the new one stays picked. */
+    fun changeTransition(id: ULong, effect: String) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { changeTransition(id, effect) } }
+                .onSuccess { proTransition = it }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
     fun toggleEffect(e: EffectInfo) = edit { toggleEffect(e.clip, e.index) }
     fun removeEffect(e: EffectInfo) = edit { removeEffect(e.clip, e.index) }
 

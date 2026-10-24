@@ -62,6 +62,7 @@ import io.github.artcraftandroid.rushcraft.core.KeyframeInfo
 import io.github.artcraftandroid.rushcraft.core.ParamInfo
 import io.github.artcraftandroid.rushcraft.core.ParamType
 import io.github.artcraftandroid.rushcraft.core.ProClip
+import io.github.artcraftandroid.rushcraft.core.TransitionControls
 import io.github.artcraftandroid.rushcraft.ui.Fc
 import io.github.artcraftandroid.rushcraft.ui.FcDialog
 import io.github.artcraftandroid.rushcraft.ui.FcType
@@ -83,6 +84,26 @@ import kotlin.math.roundToLong
  */
 @Composable
 internal fun EffectControlsPanel(ed: EditorController, modifier: Modifier) {
+    // a picked crossfade or fade shows its own settings
+    val picked = ed.proTransition
+    if (picked != null) {
+        LaunchedEffect(picked, ed.pro?.revision) { ed.loadTransition() }
+        val c = ed.transitionControls?.takeIf { it.id == picked }
+        Column(modifier.background(Fc.Layer1).testTag("pro_effect_controls")) {
+            Row(Modifier.fillMaxWidth().height(28.dp).background(Fc.Panel).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Effect Controls", style = FcType.Caption, color = Fc.Title)
+                Spacer(Modifier.width(8.dp))
+                Text(c?.name ?: "", style = FcType.Caption, color = Fc.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+            if (c != null) {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    TransitionSection(ed, c)
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
+        }
+        return
+    }
     val p = ed.pro
     val sel = ed.proSelection
     val clip = sel.firstOrNull { c -> p?.videoTracks?.any { it.id == c.track } == true } ?: sel.firstOrNull()
@@ -143,6 +164,158 @@ private fun EffectSection(ed: EditorController, clip: ProClip, e: EffectInfo) {
     }
 }
 
+/**
+ * A crossfade or fade, like any effect: its type, its span over the cut (a ramp from the first
+ * frame to the last, with a keyframe at each end), length, alignment, Reverse and its own settings.
+ */
+@Composable
+private fun TransitionSection(ed: EditorController, c: TransitionControls) {
+    val frame = TimelineMath.tickOfFrame(1, ed.rateNum, ed.rateDen)
+    Column(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp).testTag("pro_transition_${c.id}")) {
+        // its type
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(44.dp))
+            Text("Type", style = FcType.BodySmall, color = Fc.Body, modifier = Modifier.weight(1f))
+            var open by remember { mutableStateOf(false) }
+            Box {
+                Text(
+                    c.name,
+                    style = FcType.BodySmall,
+                    color = Fc.AccentLight,
+                    maxLines = 1,
+                    modifier = Modifier.heightIn(min = 44.dp).clickable(role = Role.DropdownList) { open = true }.padding(horizontal = 8.dp, vertical = 12.dp).testTag("pro_transition_type"),
+                )
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Fc.Panel) {
+                    for (t in c.choices) {
+                        DropdownMenuItem(text = { Text(t.name, style = FcType.Body, color = if (t.id == c.effect) Fc.AccentLight else Fc.Body) }, onClick = {
+                            open = false
+                            if (t.id != c.effect) ed.changeTransition(c.id, t.id)
+                        })
+                    }
+                }
+            }
+        }
+        // where it sits: a ramp with a keyframe at its first and last frame
+        TransitionRamp(ed, c, Modifier.fillMaxWidth().height(44.dp).padding(start = 44.dp))
+        // its length, as hot text in seconds
+        val seconds = ParamInfo(
+            id = "duration", name = "Duration", kind = ParamType.NUMBER, value = listOf(c.duration.toDouble() / TPS),
+            min = frame.toDouble() / TPS, max = 30.0, softMin = 0.0, softMax = 5.0, unit = "s", decimals = 2u,
+            choices = emptyList(), animatable = false, animated = false, keyframes = emptyList(),
+        )
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(44.dp))
+            Text("Duration", style = FcType.BodySmall, color = Fc.Body, modifier = Modifier.weight(1f))
+            SmallButton(ed, "transitionShorter", LucideIcons.Minus.glyph(), "One frame shorter", "pro_transition_shorter", c.duration > frame) {
+                ed.editTransition(c.id, duration = c.duration - frame)
+            }
+            ValueEditor(ed, "transition", seconds) { _, v, merge, begin ->
+                val ticks = TimelineMath.snap(((v.firstOrNull() ?: 0.0) * TPS).toLong(), ed.rateNum, ed.rateDen).coerceAtLeast(frame)
+                ed.editTransition(c.id, duration = ticks, merge = merge, begin = begin)
+            }
+            SmallButton(ed, "transitionLonger", LucideIcons.Plus.glyph(), "One frame longer", "pro_transition_longer", true) {
+                ed.editTransition(c.id, duration = c.duration + frame)
+            }
+        }
+        // its alignment on the cut (a fade from or to nothing has only its own)
+        if (c.from != null && c.to != null) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(44.dp))
+                Text("Alignment", style = FcType.BodySmall, color = Fc.Body, modifier = Modifier.weight(1f))
+                for ((id, label) in listOf("center" to "Center", "start" to "Start", "end" to "End")) {
+                    Text(
+                        label,
+                        style = FcType.BodySmall,
+                        color = if (c.align == id) Color.White else Fc.Secondary,
+                        modifier = Modifier
+                            .heightIn(min = 44.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (c.align == id) Fc.Accent else Color.Transparent)
+                            .helpClick(ed, "transitionAlign", role = Role.RadioButton) { ed.editTransition(c.id, align = id) }
+                            .padding(horizontal = 10.dp, vertical = 12.dp)
+                            .testTag("pro_transition_align_$id"),
+                    )
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(44.dp))
+            Text("Reverse", style = FcType.BodySmall, color = Fc.Body, modifier = Modifier.weight(1f))
+            Switch(
+                checked = c.reverse,
+                onCheckedChange = { ed.editTransition(c.id, reverse = it) },
+                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Fc.Accent),
+                modifier = Modifier.testTag("pro_transition_reverse"),
+            )
+        }
+        // its own settings
+        for (p in c.params) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(44.dp))
+                Text(p.name, style = FcType.BodySmall, color = Fc.Body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                ValueEditor(ed, "transition", p) { prm, v, merge, begin -> ed.setTransitionParam(c.id, prm, v, merge, begin) }
+            }
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Reset",
+                style = FcType.BodySmall,
+                color = Fc.AccentLight,
+                modifier = Modifier.heightIn(min = 44.dp).helpClick(ed, "transitionReset") { ed.resetTransition(c.id) }.padding(horizontal = 12.dp, vertical = 12.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The transition over its clips: the outgoing clip's tail and the incoming clip's head, the cut,
+ * and the transition as a ramp from 0 to 100 % with a keyframe at each end. Tap to go to its
+ * start, middle or end.
+ */
+@Composable
+private fun TransitionRamp(ed: EditorController, c: TransitionControls, modifier: Modifier) {
+    val end = c.start + c.duration
+    // a little of each clip on either side
+    val pad = (c.duration / 2).coerceAtLeast(1L)
+    val from = c.start - pad
+    val span = (end + pad - from).coerceAtLeast(1L)
+    val cut = when (c.align) {
+        "start" -> c.start
+        "end" -> end
+        else -> c.start + c.duration / 2
+    }
+    Canvas(
+        modifier
+            .pointerInput(c.id, c.start, c.duration) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val t = from + (down.position.x / size.width * span).toLong()
+                    // to the nearest of its start, middle and end
+                    ed.seek(listOf(c.start, c.start + c.duration / 2, end).minBy { abs(it - t) }, draft = false)
+                }
+            }
+            .semantics { contentDescription = "${c.name} over the cut" },
+    ) {
+        fun x(t: Long) = (t - from).toFloat() / span * size.width
+        val top = 6.dp.toPx()
+        val bottom = size.height - 6.dp.toPx()
+        // the two clips
+        drawRect(Color(0xFF4A5BB5).copy(alpha = 0.55f), Offset(0f, top), Size(x(cut), bottom - top))
+        drawRect(Color(0xFF5B8A5B).copy(alpha = 0.55f), Offset(x(cut), top), Size(size.width - x(cut), bottom - top))
+        drawLine(Color.Black, Offset(x(cut), top), Offset(x(cut), bottom), 2.dp.toPx())
+        // the ramp and its keyframes
+        val a = Offset(x(c.start), if (c.reverse) top else bottom)
+        val b = Offset(x(end), if (c.reverse) bottom else top)
+        drawRect(Color.White.copy(alpha = 0.18f), Offset(a.x, top), Size(b.x - a.x, bottom - top))
+        drawLine(Fc.AccentLight, a, b, 2.dp.toPx())
+        drawKeyframe(a, "linear", Color.White, radius = 5.dp.toPx())
+        drawKeyframe(b, "linear", Color.White, radius = 5.dp.toPx())
+        // the playhead
+        val px = x(ed.playhead)
+        if (px in 0f..size.width) drawLine(Fc.AccentLight, Offset(px, 0f), Offset(px, size.height), 1.5.dp.toPx())
+    }
+}
+
 /** A parameter: its stopwatch, name and value; with its keyframes when it is animated. */
 @Composable
 private fun ParamRow(ed: EditorController, clip: ProClip, e: EffectInfo, p: ParamInfo) {
@@ -182,7 +355,7 @@ private fun ParamRow(ed: EditorController, clip: ProClip, e: EffectInfo, p: Para
                     })
                 }
             }
-            ValueEditor(ed, e, p)
+            ValueEditor(ed, e.id, p) { prm, v, merge, begin -> ed.setParam(e, prm, v, merge, begin) }
         }
         if (p.animated) {
             Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -208,20 +381,26 @@ private fun SmallButton(ed: EditorController, help: String, glyph: Glyph, descri
 
 private fun fmt(v: Double, decimals: Int): String = if (v.isNaN()) "auto" else "%.${decimals.coerceIn(0, 3)}f".format(v)
 
-/** The value: hot text to drag (or tap to type) for numbers, points and angles; a switch; a menu of choices. */
+/** A parameter's new value: (parameter, value, merge into the drag's undo step, a drag's first change). */
+internal typealias SetParam = (ParamInfo, List<Double>, Boolean, Boolean) -> Unit
+
+/**
+ * The value: hot text to drag (or tap to type) for numbers, points and angles; a switch; a menu of
+ * choices. [owner] names it in test tags (the effect, or the transition); [set] changes it.
+ */
 @Composable
-private fun ValueEditor(ed: EditorController, e: EffectInfo, p: ParamInfo) {
+internal fun ValueEditor(ed: EditorController, owner: String, p: ParamInfo, set: SetParam) {
     when (p.kind) {
-        ParamType.NUMBER, ParamType.ANGLE -> HotNumber(ed, e, p, 0)
+        ParamType.NUMBER, ParamType.ANGLE -> HotNumber(ed, owner, p, 0, set)
         ParamType.POINT -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            HotNumber(ed, e, p, 0)
-            HotNumber(ed, e, p, 1)
+            HotNumber(ed, owner, p, 0, set)
+            HotNumber(ed, owner, p, 1, set)
         }
         ParamType.TOGGLE -> Switch(
             checked = (p.value.firstOrNull() ?: 0.0) >= 0.5,
-            onCheckedChange = { ed.setParam(e, p, listOf(if (it) 1.0 else 0.0), merge = false, begin = true) },
+            onCheckedChange = { set(p, listOf(if (it) 1.0 else 0.0), false, true) },
             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Fc.Accent),
-            modifier = Modifier.testTag("pro_value_${e.id}_${p.id}"),
+            modifier = Modifier.testTag("pro_value_${owner}_${p.id}"),
         )
         ParamType.CHOICE -> {
             var open by remember { mutableStateOf(false) }
@@ -236,13 +415,13 @@ private fun ValueEditor(ed: EditorController, e: EffectInfo, p: ParamInfo) {
                         .heightIn(min = 44.dp)
                         .clickable(role = Role.DropdownList) { open = true }
                         .padding(horizontal = 8.dp, vertical = 12.dp)
-                        .testTag("pro_value_${e.id}_${p.id}"),
+                        .testTag("pro_value_${owner}_${p.id}"),
                 )
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Fc.Panel) {
                     p.choices.forEachIndexed { k, name ->
                         DropdownMenuItem(text = { Text(name, style = FcType.Body, color = if (k == i) Fc.AccentLight else Fc.Body) }, onClick = {
                             open = false
-                            ed.setParam(e, p, listOf(k.toDouble()), merge = false, begin = true)
+                            set(p, listOf(k.toDouble()), false, true)
                         })
                     }
                 }
@@ -265,7 +444,7 @@ private fun ValueEditor(ed: EditorController, e: EffectInfo, p: ParamInfo) {
  * drag), tap to type it.
  */
 @Composable
-private fun HotNumber(ed: EditorController, e: EffectInfo, p: ParamInfo, part: Int) {
+private fun HotNumber(@Suppress("UNUSED_PARAMETER") ed: EditorController, owner: String, p: ParamInfo, part: Int, set: SetParam) {
     var shown by remember(p.value, part) { mutableStateOf(p.value.getOrNull(part) ?: 0.0) }
     var typing by remember { mutableStateOf(false) }
     val now by rememberUpdatedState(p)
@@ -279,7 +458,7 @@ private fun HotNumber(ed: EditorController, e: EffectInfo, p: ParamInfo, part: I
         val cur = now.value.toMutableList()
         while (cur.size <= part) cur.add(0.0)
         cur[part] = v
-        ed.setParam(e, now, cur, merge = true, begin = begin)
+        set(now, cur, true, begin)
     }
     Text(
         fmt(shown, p.decimals.toInt()) + (if (p.kind == ParamType.NUMBER && p.unit.isNotEmpty()) " ${p.unit}" else if (p.kind == ParamType.ANGLE) "°" else ""),
@@ -299,7 +478,7 @@ private fun HotNumber(ed: EditorController, e: EffectInfo, p: ParamInfo, part: I
                 }
             }
             .padding(horizontal = 6.dp, vertical = 12.dp)
-            .testTag("pro_value_${e.id}_${p.id}_$part"),
+            .testTag("pro_value_${owner}_${p.id}_$part"),
     )
     if (typing) {
         var text by remember { mutableStateOf(if (shown.isNaN()) "" else fmt(shown, p.decimals.toInt())) }

@@ -1758,3 +1758,76 @@ fn the_volume_line_sets_levels_and_keyframes_and_music_ducks_under_other_sound()
     assert_eq!(m.poll().undo_label.as_deref(), Some("Duck Under Dialogue"), "one step");
     assert!(m.duck_music(vec![], -15.0).is_err());
 }
+
+#[test]
+fn effects_render_to_previews_that_playback_then_shows() {
+    let (m, _d, ids) = two_clips();
+    // a heavy-ish look on the first clip, a crossfade at the cut
+    let e = effect_presets().into_iter().next().expect("an effect preset");
+    m.set_effect(ids[0], e.id.clone(), 80.0, false, false).unwrap();
+    m.crossfade(ids[0], true, false, 0.5).unwrap();
+    let bar = m.render_bar();
+    assert!(bar.iter().any(|r| r.state == "yellow" || r.state == "red"), "{bar:?}");
+    let job = m.render_effects().unwrap().expect("something to render");
+    for _ in 0..2400 {
+        let st = m.export_status(job).unwrap();
+        if st.finished {
+            assert!(st.error.is_none(), "{:?}", st.error);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let bar = m.render_bar();
+    assert!(bar.iter().any(|r| r.state == "green"), "{bar:?}");
+    assert!(m.render_effects().unwrap().is_none(), "nothing left to render: {bar:?}");
+    // the rendered stretch plays from its preview, at the size asked for
+    let g = bar.iter().find(|r| r.state == "green").unwrap();
+    let f = m.renderer().unwrap().frame((g.start + g.end) / 2, 360, true, None).unwrap();
+    assert!(f.width.max(f.height) <= 360 && f.width > 0, "{}x{}", f.width, f.height);
+    // an edit makes its stretch need rendering again
+    m.set_effect(ids[0], e.id.clone(), 20.0, false, false).unwrap();
+    assert!(m.render_bar().iter().any(|r| r.state != "green"));
+}
+
+#[test]
+fn a_crossfade_is_edited_like_any_effect_type_length_alignment_and_settings() {
+    let (m, _d, ids) = two_clips();
+    m.crossfade(ids[0], true, true, 0.5).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let v1 = t.video_tracks[0].id;
+    let tr = t.transitions.iter().find(|x| x.track == v1).expect("a video crossfade").id;
+    let c = m.transition_controls(tr).unwrap();
+    assert!(c.video && c.effect == "cross_dissolve" && c.align == "center", "{} {} {}", c.video, c.effect, c.align);
+    assert!(c.choices.iter().any(|x| x.id == "cross_dissolve") && c.choices.len() > 3, "{}", c.choices.len());
+    assert!(c.choices.iter().all(|x| x.id != "constant_power"), "video types only");
+    // length and alignment
+    m.edit_transition(tr, Some(SEC), None, None, false, false).unwrap();
+    let c = m.transition_controls(tr).unwrap();
+    assert_eq!((c.duration, c.align.as_str()), (SEC, "center"));
+    m.edit_transition(tr, None, Some("start".into()), None, false, false).unwrap();
+    let c = m.transition_controls(tr).unwrap();
+    assert_eq!((c.align.as_str(), c.start), ("start", 2 * SEC));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Edit Cross Dissolve"));
+    // another type keeps its place and length
+    let other = c.choices.iter().find(|x| x.id != "cross_dissolve").unwrap().id.clone();
+    let tr2 = m.change_transition(tr, other.clone()).unwrap();
+    let c = m.transition_controls(tr2).unwrap();
+    assert_eq!((c.effect.as_str(), c.duration, c.align.as_str()), (other.as_str(), SEC, "start"));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Change Transition"), "one step");
+    // a setting, then back to the defaults
+    if let Some(p) = c.params.iter().find(|p| p.kind == pro::ParamType::Number) {
+        let v = (p.value[0] + 1.0).min(p.max);
+        m.set_transition_param(tr2, p.id.clone(), vec![v], false, false).unwrap();
+        let after = m.transition_controls(tr2).unwrap();
+        assert!((after.params.iter().find(|q| q.id == p.id).unwrap().value[0] - v).abs() < 1e-6);
+        m.reset_transition(tr2).unwrap();
+        let reset = m.transition_controls(tr2).unwrap();
+        assert!((reset.params.iter().find(|q| q.id == p.id).unwrap().value[0] - p.value[0]).abs() < 1e-6);
+    }
+    // the audio crossfade offers the audio types
+    let a1 = t.audio_tracks[0].id;
+    let ta = m.pro_timeline().unwrap().transitions.iter().find(|x| x.track == a1).expect("an audio crossfade").id;
+    let c = m.transition_controls(ta).unwrap();
+    assert!(!c.video && c.choices.iter().any(|x| x.id == "constant_power"));
+    assert!(m.transition_controls(9_999_999).is_err());
+}

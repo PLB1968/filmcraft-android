@@ -41,7 +41,7 @@ data class ProHelp(val title: String, val text: String, val shortcut: String = "
 object ProHelpText {
     private val all: Map<String, ProHelp> = mapOf(
         // the tools
-        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it; tap its edge to pick it and trim a frame at a time. On a selected sound, drag the yellow volume line up or down (or its dots, the keyframes); long-press a sound to add a keyframe or to duck music under dialogue. Long-press a clip, a cut or an empty spot for more.", "V"),
+        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it; tap its edge to pick it and trim a frame at a time. On a selected sound, drag the yellow volume line up or down (or its dots, the keyframes); long-press a sound to add a keyframe or to duck music under dialogue. Tap a crossfade or fade to edit it in Effect Controls (its type, length, alignment and settings). Long-press a clip, a cut or an empty spot for more.", "V"),
         "tool.TrackSelectForward" to ProHelp("Track Select Forward tool", "Tap to select every clip on that track from the tap onward; long-press to select from there on every track. Drag to move them all together.", "A"),
         "tool.RippleEdit" to ProHelp("Ripple Edit tool", "Drag a clip's edge to trim it; the clips after it move along so no gap opens. Tap an edge to pick it and trim a frame at a time.", "B"),
         "tool.RollingEdit" to ProHelp("Rolling Edit tool", "Drag a cut between two clips to move it: one clip gets longer as the other gets shorter, and nothing else moves. Tap a cut to pick it and roll it a frame at a time.", "N"),
@@ -81,6 +81,7 @@ object ProHelpText {
         "lift" to ProHelp("Lift", "Removes everything between In and Out on the targeted tracks and leaves a gap.", ";"),
         "extract" to ProHelp("Extract", "Removes everything between In and Out on the targeted tracks and closes the gap.", "'"),
         "safeMargins" to ProHelp("Safe Margins", "Shows the action-safe (90%) and title-safe (80%) frames, to keep important things away from the edges.", ""),
+        "render" to ProHelp("Render effects", "Renders the stretches whose effects, titles or transitions are too heavy to play smoothly (the yellow and red parts of the bar along the top of the timeline); playback then shows the render and they turn green. Within In and Out when they are set. With Settings › Render effects in the background, this happens on its own a few seconds after each edit. Tap again while it renders to stop.", "Enter"),
         "proxies" to ProHelp("Toggle Proxies", "When on, the monitors play the small proxy copies of your videos, so playback is smooth. Exports always use the originals. Proxies of HD and 4K videos are made in the background (Settings › Proxies); long-press a video in the Project panel to make or remove one.", ""),
         "proxyProgress" to ProHelp("Making proxies", "A proxy (a small copy for smooth playback) is being made: how far along it is, and how many videos wait their turn. It plays smoothly once it's done. Tap to see them in the Project panel.", ""),
         "resolution" to ProHelp("Playback resolution", "Draws the picture at Full, 1/2 or 1/4 size while playing and scrubbing, so it runs smoothly. It's sharp again when you stop.", ""),
@@ -98,6 +99,10 @@ object ProHelpText {
         "redo" to ProHelp("Redo", "Puts back the last change you undid.", "Ctrl+Shift+Z"),
         "export" to ProHelp("Export", "Makes a video file of the sequence and saves it to your phone.", ""),
         // Effect Controls
+        "transitionShorter" to ProHelp("One frame shorter", "Makes the transition a frame shorter, keeping its alignment on the cut.", ""),
+        "transitionLonger" to ProHelp("One frame longer", "Makes the transition a frame longer, keeping its alignment on the cut. It can't run past the clips it joins.", ""),
+        "transitionAlign" to ProHelp("Alignment", "Where the transition sits on its cut: centred on it, starting at it (it runs into the next clip) or ending at it (it runs into the clip before).", ""),
+        "transitionReset" to ProHelp("Reset", "Puts the transition's own settings back to its type's defaults (its length and place stay).", ""),
         "fx" to ProHelp("Effect on/off (fx)", "Turns the effect off or on without losing its settings.", ""),
         "removeEffect" to ProHelp("Remove effect", "Takes the effect off the clip.", ""),
         "stopwatch" to ProHelp("Toggle animation (stopwatch)", "Turns keyframes on for this setting: a keyframe goes at the playhead, and every later change adds one. Turn it off to remove the keyframes and keep the current value.", ""),

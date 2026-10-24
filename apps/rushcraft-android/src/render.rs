@@ -149,6 +149,22 @@ impl Renderer {
     pub fn frame(&self, time: i64, max_side: u32, draft: bool, cancel: Option<Arc<CancelToken>>) -> Result<Frame, MobileError> {
         let t = self.rate.snap(Tick(time.max(0)));
         let scale = scale_for(self.width.max(self.height), max_side);
+        // a rendered preview (Render effects) plays instead of drawing the effects live; the
+        // captions are drawn over it, as they aren't part of it
+        let preview = guarded(&cancel, || self.previews.frame(&self.media, &self.project, self.seq, self.rate.frame_at(t), scale));
+        if let Some(pf) = preview {
+            // preview files decode at full size: shrink to the size asked for
+            let long = pf.width.max(pf.height).max(1);
+            let n = long.div_ceil(max_side.clamp(16, MAX_SIDE)) as usize;
+            let pf = if n > 1 { pf.box_decimated(n).map(std::sync::Arc::new).unwrap_or(pf) } else { pf };
+            let mut img = filmcraft_render::Image { w: pf.width as usize, h: pf.height as usize, px: pf.to_linear_f32() };
+            if let Some(q) = self.project.sequence(self.seq) {
+                for o in filmcraft_render::caption_overlays(q, t, img.w, img.h) {
+                    o.composite_onto(&mut img.px, img.w, img.h);
+                }
+            }
+            return Ok(frame_of(&img, t.0));
+        }
         let provider = self.provider();
         let img = guarded(&cancel, || {
             filmcraft_media::cancel::with_draft(draft, || {

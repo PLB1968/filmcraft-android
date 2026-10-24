@@ -73,6 +73,7 @@ iconography, images or other Adobe assets; open licences only; every asset attri
 | `assets/icons/settings.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/settings.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `assets/icons/info.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/info.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `assets/icons/plus.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/plus.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/minus.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/minus.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `assets/icons/search.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/search.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `assets/icons/pencil.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pencil.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `assets/icons/share-2.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/share-2.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
