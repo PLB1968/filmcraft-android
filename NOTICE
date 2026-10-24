@@ -1,5 +1,5 @@
-FilmCraft for Android
-Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+Rushcraft (a fork of FilmCraft for Android)
+Copyright (c) 2026 ArtCraft Team, the FilmCraft contributors and the Rushcraft contributors.
 
 This repository holds the Android app and the parts of FilmCraft (https://github.com/storytold/filmcraft)
 it builds: the engine crates and assets/.

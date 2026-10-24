@@ -1,0 +1,5 @@
+# UniFFI bindings of the `rushcraft_android` library.
+
+[bindings.kotlin]
+package_name = "io.github.artcraftandroid.rushcraft.core"
+cdylib_name = "rushcraft_android"

@@ -5,8 +5,8 @@ builds each tagged release from source and checks it is byte-for-byte the APK on
 then ships ours (signed with our key), so people can move between F-Droid and GitHub builds without
 reinstalling.
 
-`io.github.artcraftandroid.filmcraft.yml` is the recipe for
-[fdroiddata](https://gitlab.com/fdroid/fdroiddata) (`metadata/io.github.artcraftandroid.filmcraft.yml`).
+`io.github.artcraftandroid.rushcraft.yml` is the recipe for
+[fdroiddata](https://gitlab.com/fdroid/fdroiddata) (`metadata/io.github.artcraftandroid.rushcraft.yml`).
 The store listing (title, descriptions, changelogs, icon, screenshots) is in
 `fastlane/metadata/android/en-US/` at the repository root; F-Droid reads it from there.
 
@@ -23,14 +23,14 @@ The store listing (title, descriptions, changelogs, icon, screenshots) is in
   natural voices are not in the APK at all: the app downloads them only when the user asks (each
   file pinned to a revision and checked against its SHA-256).
 - **One APK, for 64-bit ARM**, with version code (version code × 10) + 2. F-Droid builds it with
-  `filmcraft.unsigned=true` and compares it with ours.
+  `rushcraft.unsigned=true` and compares it with ours.
 
 Releases are built by the release workflow on Linux, as F-Droid's are.
 
 ## A release
 
-1. Set `filmcraft.version` and `filmcraft.versionCode` in
-   `apps/filmcraft-android/android/gradle.properties` (the build checks they agree: the code is
+1. Set `rushcraft.version` and `rushcraft.versionCode` in
+   `apps/rushcraft-android/android/gradle.properties` (the build checks they agree: the code is
    `((major·100 + minor)·100 + patch)·100 + (pre-release number, or 99)`, e.g. 0.0.2-beta → 201).
 2. Add `fastlane/metadata/android/en-US/changelogs/<code>2.txt` (at most 500 characters).
 3. Commit, tag `v<version>` and push the tag; the workflow refuses a tag that isn't the version in

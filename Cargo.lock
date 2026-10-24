@@ -780,35 +780,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "filmcraft-android"
-version = "0.7.2"
-dependencies = [
- "android_logger",
- "filmcraft-edit",
- "filmcraft-engine",
- "filmcraft-frame",
- "filmcraft-geom",
- "filmcraft-media",
- "filmcraft-project",
- "filmcraft-render",
- "filmcraft-speech",
- "filmcraft-text",
- "filmcraft-time",
- "filmcraft-tts",
- "log",
- "serde_json",
- "thiserror 2.0.21",
- "uniffi",
-]
-
-[[package]]
-name = "filmcraft-android-bindgen"
-version = "0.7.2"
-dependencies = [
- "uniffi",
-]
-
-[[package]]
 name = "filmcraft-apv"
 version = "0.7.2"
 dependencies = [
@@ -2416,6 +2387,35 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rushcraft-android"
+version = "0.7.2"
+dependencies = [
+ "android_logger",
+ "filmcraft-edit",
+ "filmcraft-engine",
+ "filmcraft-frame",
+ "filmcraft-geom",
+ "filmcraft-media",
+ "filmcraft-project",
+ "filmcraft-render",
+ "filmcraft-speech",
+ "filmcraft-text",
+ "filmcraft-time",
+ "filmcraft-tts",
+ "log",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uniffi",
+]
+
+[[package]]
+name = "rushcraft-android-bindgen"
+version = "0.7.2"
+dependencies = [
+ "uniffi",
 ]
 
 [[package]]

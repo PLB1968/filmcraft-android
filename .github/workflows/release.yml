@@ -40,7 +40,7 @@ jobs:
       - id: v
         name: Resolve version
         run: |
-          listed="$(sed -n 's/^filmcraft\.version=//p' apps/filmcraft-android/android/gradle.properties)"
+          listed="$(sed -n 's/^rushcraft\.version=//p' apps/rushcraft-android/android/gradle.properties)"
           if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="$listed"; fi
           if ! printf '%s' "$v" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
             echo "::error::'$v' is not a version like 1.2.3 or 1.2.3-beta"
@@ -48,7 +48,7 @@ jobs:
           fi
           # the tag must be the version gradle.properties names (F-Droid builds from that file)
           if [ "$v" != "$listed" ]; then
-            echo "::error::the tag is v$v but gradle.properties says filmcraft.version=$listed: set it (and filmcraft.versionCode) before tagging"
+            echo "::error::the tag is v$v but gradle.properties says rushcraft.version=$listed: set it (and rushcraft.versionCode) before tagging"
             exit 1
           fi
           echo "version=$v" >>"$GITHUB_OUTPUT"
@@ -87,16 +87,16 @@ jobs:
           fi
 
       - name: Build
-        working-directory: apps/filmcraft-android/android
+        working-directory: apps/rushcraft-android/android
         env:
           VERSION: ${{ steps.v.outputs.version }}
           FILMCRAFT_KEYSTORE_PASSWORD: ${{ secrets.FILMCRAFT_KEYSTORE_PASSWORD }}
           FILMCRAFT_KEY_ALIAS: ${{ secrets.FILMCRAFT_KEY_ALIAS }}
           FILMCRAFT_KEY_PASSWORD: ${{ secrets.FILMCRAFT_KEY_PASSWORD }}
         run: |
-          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" --no-daemon
+          ./gradlew assembleRelease "-Prushcraft.abis=arm64-v8a" "-Prushcraft.version=$VERSION" --no-daemon
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/dist/rushcraft-android-$VERSION.apk"
 
       - name: APK
         run: |

@@ -1,17 +1,17 @@
 <p align="center">
-  <img src="assets/app-icon/filmcraft-1024.png" alt="FilmCraft's app icon" width="128">
+  <img src="assets/app-icon/filmcraft-1024.png" alt="Rushcraft's app icon (still FilmCraft's)" width="128">
 </p>
 
-<h1 align="center">FilmCraft for Android</h1>
+<h1 align="center">Rushcraft</h1>
 
 <p align="center">
-  <b>FilmCraft-android is an open-source reimplementation of the Adobe Premiere Android app, created using the same Rust engine, <a href="https://github.com/storytold/filmcraft">FilmCraft</a>, as the desktop app, and built with a Kotlin/Jetpack Compose UI framework.</b><br>
-  Many credits to the original maintainers, <a href="https://github.com/storytold">storytold</a>.
+  <b>Rushcraft is a mobile video editor for Android in the spirit of Adobe's discontinued Premiere Rush: a desktop-style editor (Source and Program monitors, tracks, Premiere's tools) on your phone. It is a fork of <a href="https://github.com/artcraft-android/filmcraft-android">FilmCraft for Android</a>, built on the same Rust engine, <a href="https://github.com/storytold/filmcraft">FilmCraft</a>, with a Kotlin/Jetpack Compose UI.</b><br>
+  Many credits to the original maintainers, <a href="https://github.com/storytold">storytold</a> and <a href="https://github.com/artcraft-android">artcraft-android</a>.
 </p>
 
 <p align="center">
-  <a href="https://github.com/artcraft-android/filmcraft-android/releases"><img src="https://raw.githubusercontent.com/Kunzisoft/Github-badge/main/get-it-on-github.png" alt="Get it on GitHub" height="60"></a>
-  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/artcraft-android/filmcraft-android"><img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="60"></a>
+  <a href="https://github.com/PLB1968/filmcraft-android/releases"><img src="https://raw.githubusercontent.com/Kunzisoft/Github-badge/main/get-it-on-github.png" alt="Get it on GitHub" height="60"></a>
+  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/PLB1968/filmcraft-android"><img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="60"></a>
 </p>
 
 <p align="center">
@@ -126,7 +126,7 @@
 
 ## Planned features
 
-FilmCraft for Android is in beta.
+Rushcraft is in beta.
 
 | Area | Status |
 |---|---|
@@ -142,7 +142,7 @@ FilmCraft for Android is in beta.
 | Export at 720p, 1080p or 4K, 24 to 60 fps, saved to Movies and shared | ✅ |
 | Upright and sideways layouts | ✅ |
 | Stock music, templates | ⬜ |
-| Generative AI, cloud storage, accounts | 🚫 FilmCraft is a local app |
+| Generative AI, cloud storage, accounts | 🚫 Rushcraft is a local app |
 
 <sub>✅ works today · 🚧 in progress · ⬜ not started · 🚫 not planned</sub>
 
@@ -153,7 +153,7 @@ FilmCraft for Android is in beta.
 
 * Clone this repository
 * Make sure you have at least 4 GB of free disk space
-* enter `apps/filmcraft-android/android` and run `./gradlew assembleRelease`, or open that folder in Android Studio and press Run.
+* enter `apps/rushcraft-android/android` and run `./gradlew assembleRelease`, or open that folder in Android Studio and press Run.
 
 Build time dependencies:
 
@@ -174,8 +174,8 @@ Build time dependencies:
 
 ## License
 
-[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. FilmCraft for Android is not affiliated with Adobe;
-Premiere is a trademark of Adobe Inc.
+[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Rushcraft is not affiliated with Adobe;
+Premiere and Premiere Rush are trademarks of Adobe Inc.
 
 <br>
 
