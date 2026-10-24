@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- the editor's dark surface, so nothing flashes before the first frame -->
+    <color name="window_background">#FF000000</color>
+    <!-- night blue, the owl icon's field (docs/icon/owl.py) -->
+    <color name="ic_launcher_background">#FF1E2A4A</color>
+
+    <style name="Theme.RushCraft" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

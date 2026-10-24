@@ -1,5 +1,0 @@
-# UniFFI bindings of the `filmcraft_android` library.
-
-[bindings.kotlin]
-package_name = "io.github.artcraftandroid.filmcraft.core"
-cdylib_name = "filmcraft_android"

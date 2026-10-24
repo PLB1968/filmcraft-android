@@ -1,5 +1,5 @@
-FilmCraft for Android
-Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+RushCraft (a fork of FilmCraft for Android)
+Copyright (c) 2026 ArtCraft Team, the FilmCraft contributors and the RushCraft contributors.
 
 This repository holds the Android app and the parts of FilmCraft (https://github.com/storytold/filmcraft)
 it builds: the engine crates and assets/.
@@ -31,6 +31,7 @@ Downloaded at runtime, never in this repository or the app:
 Android app (apps/filmcraft-android):
 - UniFFI (https://github.com/mozilla/uniffi-rs) — MPL-2.0: the uniffi crate in the library, and the
   generator of the Kotlin bindings (generated at build time, not committed).
+- ndk (https://github.com/rust-mobile/ndk) — MIT OR Apache-2.0: MediaCodec for hardware video decoding.
 - JNA (https://github.com/java-native-access/jna) — Apache-2.0 (dual-licensed with LGPL-2.1; used
   under Apache-2.0).
-- AndroidX, Jetpack Compose, ExifInterface and kotlinx.coroutines — Apache-2.0.
+- AndroidX, Jetpack Compose, ExifInterface, Media3 (Transformer, for proxies) and kotlinx.coroutines — Apache-2.0.

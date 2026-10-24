@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RushCraft's owl (an original design): docs/icon/owl.py writes this file. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#2D45B5" android:pathData="M35,31L48,40L40,47z" />
+    <path android:fillColor="#2D45B5" android:pathData="M73,31L60,40L68,47z" />
+    <path android:fillColor="#2D45B5" android:pathData="M28,60a26,26 0 1,0 52,0a26,26 0 1,0 -52,0z" />
+    <path android:fillColor="#3FA9E0" android:pathData="M32,59a12,12 0 1,0 24,0a12,12 0 1,0 -24,0z" />
+    <path android:fillColor="#3FA9E0" android:pathData="M52,59a12,12 0 1,0 24,0a12,12 0 1,0 -24,0z" />
+    <path android:fillColor="#F4F7FB" android:pathData="M36.5,60a7.5,7.5 0 1,0 15,0a7.5,7.5 0 1,0 -15,0z" />
+    <path android:fillColor="#A8DDFF" android:pathData="M39,62a5,5 0 1,0 10,0a5,5 0 1,0 -10,0z" />
+    <path android:fillColor="#14183A" android:pathData="M41.4,62.5a2.6,2.6 0 1,0 5.2,0a2.6,2.6 0 1,0 -5.2,0z" />
+    <path android:fillColor="#2B7FC4" android:pathData="M35.8,60a8.2,8.2 0 0,1 16.4,0z" />
+    <path android:fillColor="#14183A" android:pathData="M35.8,59.3L52.2,59.3L52.2,61L35.8,61z" />
+    <path android:fillColor="#F4F7FB" android:pathData="M56.5,60a7.5,7.5 0 1,0 15,0a7.5,7.5 0 1,0 -15,0z" />
+    <path android:fillColor="#A8DDFF" android:pathData="M59,62a5,5 0 1,0 10,0a5,5 0 1,0 -10,0z" />
+    <path android:fillColor="#14183A" android:pathData="M61.4,62.5a2.6,2.6 0 1,0 5.2,0a2.6,2.6 0 1,0 -5.2,0z" />
+    <path android:fillColor="#2B7FC4" android:pathData="M55.8,60a8.2,8.2 0 0,1 16.4,0z" />
+    <path android:fillColor="#14183A" android:pathData="M55.8,59.3L72.2,59.3L72.2,61L55.8,61z" />
+    <path android:fillColor="#F5C518" android:pathData="M51,66L57,66L54,76z" />
+</vector>
