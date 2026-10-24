@@ -249,8 +249,6 @@ private fun TopBar(ed: EditorController, sideBySide: Boolean) {
             FcIconButton(LucideIcons.Redo2.glyph(), "Redo", { ed.redo() }, enabled = st?.canRedo == true, modifier = Modifier.testTag("editor_top_bar_redo_button"))
             Spacer(Modifier.width(8.dp))
         }
-        ModeSwitch(ed)
-        Spacer(Modifier.width(8.dp))
         Box(
             Modifier
                 .padding(end = 12.dp)

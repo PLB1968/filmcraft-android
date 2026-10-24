@@ -46,7 +46,7 @@ object ProHelpText {
         "tool.RippleEdit" to ProHelp("Ripple Edit tool", "Drag a clip's edge to trim it; the clips after it move along so no gap opens.", "B"),
         "tool.RollingEdit" to ProHelp("Rolling Edit tool", "Drag a cut between two clips to move it: one clip gets longer as the other gets shorter, and nothing else moves.", "N"),
         "tool.RateStretch" to ProHelp("Rate Stretch tool", "Drag a clip's edge to change its length by changing its speed: the same footage plays faster or slower.", "R"),
-        "tool.Razor" to ProHelp("Razor tool", "Tap a clip to cut it in two there (its linked sound too). Long-press to cut every track at that point.", "C"),
+        "tool.Razor" to ProHelp("Razor tool", "Cuts happen at the playhead: tap a clip to cut it there (its linked sound too), or long-press to cut every track there. Double-tap this button to cut at the playhead with any tool: the selected clip, or every track when no selected clip is under the playhead. The clip before the cut is selected after.", "C, or Ctrl+K to cut at the playhead"),
         "tool.Slip" to ProHelp("Slip tool", "Drag a clip to change which part of its footage it shows. Its place and length on the timeline stay the same.", "Y"),
         "tool.Slide" to ProHelp("Slide tool", "Drag a clip to move it between its neighbours. They get longer or shorter to make room, so the total length stays the same.", "U"),
         "tool.Hand" to ProHelp("Hand tool", "Drag to scroll the timeline without selecting or moving anything.", "H"),
@@ -95,7 +95,6 @@ object ProHelpText {
         "undo" to ProHelp("Undo", "Takes back the last change.", "Ctrl+Z"),
         "redo" to ProHelp("Redo", "Puts back the last change you undid.", "Ctrl+Shift+Z"),
         "export" to ProHelp("Export", "Makes a video file of the sequence and saves it to your phone.", ""),
-        "mode" to ProHelp("Simple / Pro", "Switches between the simple phone editor and Pro mode. Both edit the same project; each project remembers its choice.", ""),
         // Effect Controls
         "fx" to ProHelp("Effect on/off (fx)", "Turns the effect off or on without losing its settings.", ""),
         "removeEffect" to ProHelp("Remove effect", "Takes the effect off the clip.", ""),
@@ -109,12 +108,25 @@ object ProHelpText {
 }
 
 /**
- * A Pro mode button's touch: a tap does [onClick] (when [enabled]); a long press explains the
- * button ([help], see [ProHelpText]), even while it is disabled.
+ * A Pro mode button's touch: a tap does [onClick] (when [enabled]), a double tap [onDoubleClick]
+ * if given; a long press explains the button ([help], see [ProHelpText]), even while it is
+ * disabled.
  */
 @OptIn(ExperimentalFoundationApi::class)
-internal fun Modifier.helpClick(ed: EditorController, help: String, enabled: Boolean = true, role: Role? = Role.Button, onClick: () -> Unit): Modifier =
-    combinedClickable(role = role, onLongClick = { ProHelpText.of(help)?.let { ed.help = it } }, onClick = { if (enabled) onClick() })
+internal fun Modifier.helpClick(
+    ed: EditorController,
+    help: String,
+    enabled: Boolean = true,
+    role: Role? = Role.Button,
+    onDoubleClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+): Modifier =
+    combinedClickable(
+        role = role,
+        onLongClick = { ProHelpText.of(help)?.let { ed.help = it } },
+        onDoubleClick = onDoubleClick?.let { d -> { if (enabled) d() } },
+        onClick = { if (enabled) onClick() },
+    )
 
 /** A round icon button with long-press help (Pro mode's FcIconButton). */
 @Composable

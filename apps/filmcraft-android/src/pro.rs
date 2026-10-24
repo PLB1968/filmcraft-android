@@ -467,7 +467,15 @@ pub(crate) fn rate_stretch(s: &mut Session, clip: u64, head: bool, delta: i64) -
 /// The Razor tool: cut clip `clip` (and its linked partners) at `time`, or, with no clip, every
 /// clip on `track` there (every track when that is empty too). Returns how many cuts were made.
 pub(crate) fn razor(s: &mut Session, time: i64, clip: Option<u64>, track: Option<u64>) -> Result<u32, MobileError> {
-    let mut p = json!({"time": time.max(0)});
+    let t = time.max(0);
+    let before = ending_at(s, t)?;
+    let n = razor_once(s, t, clip, track)?;
+    select_left_of(s, t, &before, n)?;
+    Ok(n)
+}
+
+fn razor_once(s: &mut Session, t: i64, clip: Option<u64>, track: Option<u64>) -> Result<u32, MobileError> {
+    let mut p = json!({ "time": t });
     if let Some(c) = clip {
         p["clip"] = json!(c);
     } else if let Some(t) = track {
@@ -475,6 +483,48 @@ pub(crate) fn razor(s: &mut Session, time: i64, clip: Option<u64>, track: Option
     }
     let r = ex(s, "timeline.razor", p)?;
     Ok(u32::try_from(r["cuts"].as_u64().unwrap_or(0)).unwrap_or(u32::MAX))
+}
+
+/// The clips (on every track) that end at `t`.
+fn ending_at(s: &Session, t: i64) -> Result<std::collections::HashSet<u64>, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    Ok(seq.video_tracks.iter().chain(&seq.audio_tracks).flat_map(|tr| &tr.items).filter(|c| c.end().0 == t).map(|c| c.id.0).collect())
+}
+
+/// After `n` cuts at `t`: select the clip before each new cut (the pieces that now end there).
+fn select_left_of(s: &mut Session, t: i64, before: &std::collections::HashSet<u64>, n: u32) -> Result<(), MobileError> {
+    if n == 0 {
+        return Ok(());
+    }
+    let mut left: Vec<u64> = ending_at(s, t)?.difference(before).copied().collect();
+    left.sort_unstable();
+    if !left.is_empty() {
+        ex(s, "timeline.select", json!({ "clips": left }))?;
+    }
+    Ok(())
+}
+
+/// Cut at the playhead (a double tap on the Razor tool): the selected clips under it (and
+/// their linked partners), else every track. The clip before each cut is selected after.
+pub(crate) fn cut_at_playhead(s: &mut Session) -> Result<u32, MobileError> {
+    let t = s.playhead().0;
+    let spans = |s: &Session, c: u64| {
+        model::sequence(s).ok().and_then(|(_, q)| model::find(q, ClipId(c)).map(|f| f.clip.start.0 < t && f.clip.end().0 > t)).unwrap_or(false)
+    };
+    let under: Vec<u64> = s.state.selection.iter().map(|c| c.0).filter(|&c| spans(s, c)).collect();
+    if under.is_empty() {
+        return razor(s, t, None, None);
+    }
+    let before = ending_at(s, t)?;
+    let mut n = 0;
+    for c in under {
+        // a partner cut along with an earlier one no longer spans the playhead
+        if spans(s, c) {
+            n += razor_once(s, t, Some(c), None)?;
+        }
+    }
+    select_left_of(s, t, &before, n)?;
+    Ok(n)
 }
 
 /// The Track Select Forward tool: select every clip on `track` (every track when empty) that

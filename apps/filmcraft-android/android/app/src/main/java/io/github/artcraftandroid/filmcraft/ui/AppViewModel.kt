@@ -64,15 +64,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     val projects = Projects(app)
     val prefs = AppPrefs(app)
 
-    /** Settings › Pro mode: what projects that were never switched open in. */
-    var proModeDefault by mutableStateOf(prefs.proModeDefault)
-        private set
-
-    fun changeProModeDefault(on: Boolean) {
-        proModeDefault = on
-        prefs.proModeDefault = on
-    }
-
     /** Settings › Proxies: make proxies of HD and 4K videos on their own. */
     var autoProxies by mutableStateOf(prefs.autoProxies)
         private set
@@ -241,7 +232,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         opening = true
         try {
             val entry = withContext(Dispatchers.IO) { projects.touch(p) }
-            val ed = EditorController(e, entry, projects, viewModelScope, this, proDefault = proModeDefault, prefs = prefs, proxyMaker = ProxyMaker(getApplication<Application>()))
+            val ed = EditorController(e, entry, projects, viewModelScope, this, prefs = prefs, proxyMaker = ProxyMaker(getApplication<Application>()))
             ed.load(fresh)
             editor = ed
             screen = Screen.Editor

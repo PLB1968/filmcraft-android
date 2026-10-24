@@ -785,9 +785,16 @@ impl MobileSession {
         self.pro_edit(|s| pro::rate_stretch(s, clip, head, delta))
     }
 
-    /// Razor at `time`: one clip (and its partners), one track, or every track.
+    /// Razor at `time`: one clip (and its partners), one track, or every track. The clip
+    /// before each cut is selected after. Returns how many cuts were made.
     pub fn razor(&self, time: i64, clip: Option<u64>, track: Option<u64>) -> Result<u32, MobileError> {
         self.pro_edit(|s| pro::razor(s, time, clip, track))
+    }
+
+    /// Cut at the playhead: the selected clips under it (and their partners), else every
+    /// track. Returns how many cuts were made.
+    pub fn cut_at_playhead(&self) -> Result<u32, MobileError> {
+        self.pro_edit(pro::cut_at_playhead)
     }
 
     /// Track Select Forward from `time` on `track` (every track when empty).

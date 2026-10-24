@@ -132,7 +132,6 @@ class EditorController(
     private val projects: Projects,
     private val scope: CoroutineScope,
     private val host: EditorHost,
-    proDefault: Boolean = false,
     private val prefs: AppPrefs? = null,
     /** Makes proxies with the phone's video hardware (else the engine makes them, slowly). */
     private val proxyMaker: ProxyMaker? = null,
@@ -169,8 +168,8 @@ class EditorController(
     /** A clip is being dragged or trimmed: tools wait. */
     var gesture by mutableStateOf(false)
 
-    /** The desktop-style editor ([ProEditor]) instead of the phone one; remembered per project. */
-    var proMode by mutableStateOf(project.proMode ?: proDefault)
+    /** Rushcraft always edits in Pro mode (the desktop-style editor). */
+    var proMode by mutableStateOf(true)
         private set
     /** The timeline as Pro mode shows it (read only while Pro mode is on). */
     var pro by mutableStateOf<ProTimeline?>(null)
@@ -860,20 +859,6 @@ class EditorController(
 
     // ---- Pro mode ----
 
-    /** Switch between the phone editor and Pro mode; the project remembers it. */
-    fun switchProMode(on: Boolean) {
-        if (on == proMode) return
-        stop()
-        panel = null
-        submenu = Submenu.None
-        proMode = on
-        rememberView()
-        scope.launch {
-            if (on) refreshPro()
-            refresh()
-        }
-    }
-
     /** Keep the project's Pro mode and track heights in its listing. */
     private fun rememberView() {
         val p = project.copy(proMode = proMode, trackHeights = trackHeights.toMap(), panes = proPanes.toMap())
@@ -989,7 +974,24 @@ class EditorController(
     fun proSlip(clip: ULong, delta: Long) = edit { slipClip(clip, delta) }
     fun proSlide(clip: ULong, delta: Long) = edit { slideClip(clip, delta) }
     fun proRateStretch(clip: ULong, head: Boolean, delta: Long) = edit { rateStretch(clip, head, delta) }
-    fun proRazor(at: Long, clip: ULong?, track: ULong?) = edit { razor(at, clip, track) }
+    /** Razor at [at]; the clip before the cut is selected after. */
+    fun proRazor(at: Long, clip: ULong?, track: ULong?) = cut { razor(at, clip, track) }
+
+    /** Cut at the playhead: the selected clip under it (and its sound), else every track. */
+    fun cutAtPlayhead() = cut { cutAtPlayhead() }
+
+    /** A cut; says so when there was nothing at the playhead to cut. */
+    private fun cut(block: MobileSession.() -> UInt) {
+        stop()
+        scope.launch {
+            try {
+                if (engine.command { block() } == 0u) host.tell("Nothing to cut at the playhead: move it over a clip.")
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
+    }
     fun proShift(clips: List<ULong>, delta: Long) = edit { shiftClips(clips, delta) }
     fun proSelectForward(track: ULong?, at: Long) = quickEdit { selectForward(track, at) }
 

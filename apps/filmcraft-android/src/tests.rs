@@ -1693,3 +1693,33 @@ fn the_app_makes_proxies_with_the_phones_hardware_and_the_engine_takes_over_when
     // a stale report changes nothing
     assert!(!m.proxy_done(w.media, true));
 }
+
+#[test]
+fn a_cut_selects_the_clip_before_it_and_cut_at_playhead_cuts_the_selection_else_everything() {
+    let (m, _d, ids) = two_clips();
+    let selected = |m: &MobileSession| -> Vec<u64> { m.pro_timeline().unwrap().clips.iter().filter(|c| c.selected).map(|c| c.id).collect() };
+    let ends_at = |m: &MobileSession, id: u64, t: i64| pclip(m, id).start + pclip(m, id).duration == t;
+    // a Razor cut selects the piece before it (and its sound's)
+    m.razor(SEC, Some(ids[0]), None).unwrap();
+    let sel = selected(&m);
+    assert_eq!(sel.len(), 2, "{sel:?}");
+    assert!(sel.iter().all(|&c| ends_at(&m, c, SEC)));
+    m.undo();
+    // cut at the playhead with the second clip selected: only it (and its sound) is cut
+    m.select_clips(vec![ids[1]], false).unwrap();
+    m.set_playhead(2 * SEC + SEC / 2);
+    let before = m.pro_timeline().unwrap().clips.len();
+    assert_eq!(m.cut_at_playhead().unwrap(), 2);
+    assert_eq!(m.pro_timeline().unwrap().clips.len(), before + 2);
+    assert!(selected(&m).iter().all(|&c| ends_at(&m, c, 2 * SEC + SEC / 2)));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Razor"), "one step");
+    m.undo();
+    // a selected clip the playhead isn't on: every track is cut
+    m.select_clips(vec![ids[1]], false).unwrap();
+    m.set_playhead(SEC / 2);
+    assert_eq!(m.cut_at_playhead().unwrap(), 2);
+    assert!(selected(&m).iter().all(|&c| ends_at(&m, c, SEC / 2)));
+    // nothing under the playhead: no cut, no error
+    m.set_playhead(0);
+    assert_eq!(m.cut_at_playhead().unwrap(), 0);
+}

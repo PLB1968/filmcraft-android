@@ -1044,7 +1044,7 @@ private fun Tracks(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             when (ed.proTool) {
                                 ProTool.Zoom -> zoom(0.5f, x)
-                                ProTool.Razor -> ed.proRazor(frameAt(x), null, null)
+                                ProTool.Razor -> ed.proRazor(ed.playhead, null, null)
                                 ProTool.TrackSelectForward -> ed.proSelectForward(null, tAt(x))
                                 else -> {
                                     val row = hitRow
@@ -1091,7 +1091,8 @@ private fun Tracks(
                             when (ed.proTool) {
                             ProTool.Zoom -> zoom(2f, x)
                             ProTool.Hand -> {}
-                            ProTool.Razor -> if (hit != null && hitRow?.track?.locked != true) ed.proRazor(frameAt(x), hit.id, null)
+                            // cuts happen at the playhead (a finger is too wide to cut where it lands)
+                            ProTool.Razor -> if (hit != null && hitRow?.track?.locked != true) ed.proRazor(ed.playhead, hit.id, null)
                             ProTool.TrackSelectForward -> ed.proSelectForward(hitRow?.track?.id, tAt(x))
                             ProTool.Type -> ed.titleAt = frameAt(x)
                             else -> ed.proSelect(hit?.id)
@@ -1258,6 +1259,16 @@ private fun DrawScope.drawClip(
     val h = r.height - 4.dp.toPx()
     val dim = if (c.enabled) 1f else 0.45f
     drawRoundRect(fill.copy(alpha = alpha * dim), Offset(x0, top), Size(max(1f, x1 - x0), h), CornerRadius(3.dp.toPx()))
+    // its ends: a dark line and a white notch in each top corner, so a cut between two clips
+    // shows as a bow tie
+    val notch = 7.dp.toPx()
+    if (x1 - x0 > notch * 3) {
+        val mark = Color.White.copy(alpha = alpha * 0.9f)
+        drawPath(Path().apply { moveTo(x0, top); lineTo(x0 + notch, top); lineTo(x0, top + notch); close() }, mark)
+        drawPath(Path().apply { moveTo(x1, top); lineTo(x1 - notch, top); lineTo(x1, top + notch); close() }, mark)
+    }
+    drawLine(Color.Black.copy(alpha = alpha), Offset(x0, top), Offset(x0, top + h), 2.dp.toPx())
+    drawLine(Color.Black.copy(alpha = alpha), Offset(x1, top), Offset(x1, top + h), 2.dp.toPx())
     if (c.selected || ghost) drawRoundRect(Color.White.copy(alpha = alpha), Offset(x0, top), Size(max(1f, x1 - x0), h), CornerRadius(3.dp.toPx()), style = Stroke(2.dp.toPx()))
     // the clip's keyframes, along its foot
     if (c.keyframes.isNotEmpty() && c.duration > 0 && h > 20.dp.toPx()) {

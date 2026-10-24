@@ -155,8 +155,6 @@ private fun ProTopBar(ed: EditorController) {
     Row(Modifier.fillMaxWidth().height(FcSize.TopBar).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         HelpIconButton(ed, LucideIcons.House.glyph(), "Home", "home", "editor_home_button", iconSize = 24.dp) { ed.closeEditor() }
         Text(ed.project.name, style = FcType.Label, color = Fc.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-        ModeSwitch(ed)
-        Spacer(Modifier.width(4.dp))
         HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = 24.dp) { ed.undo() }
         HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = 24.dp) { ed.redo() }
         Box(
@@ -171,32 +169,6 @@ private fun ProTopBar(ed: EditorController) {
             contentAlignment = Alignment.Center,
         ) {
             Text("Export", style = FcType.Button, color = Color.Black)
-        }
-    }
-}
-
-/** The Simple / Pro switch in the editor's top bar (both modes edit the same project). */
-@Composable
-fun ModeSwitch(ed: EditorController) {
-    Row(
-        Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(Fc.Raised).padding(2.dp).testTag("editor_mode_switch"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        for ((label, pro) in listOf("Simple" to false, "Pro" to true)) {
-            val on = ed.proMode == pro
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (on) Fc.Accent else Color.Transparent)
-                    .helpClick(ed, "mode", role = Role.Tab) { ed.switchProMode(pro) }
-                    .padding(horizontal = 12.dp)
-                    .testTag("editor_mode_${label.lowercase()}")
-                    .semantics { selected = on },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, style = FcType.Caption, color = if (on) Color.White else Fc.Body)
-            }
         }
     }
 }
@@ -668,7 +640,7 @@ private fun ToolButton(ed: EditorController, t: ProTool, modifier: Modifier) {
             .padding(2.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(if (on) Fc.Accent else Color.Transparent)
-            .helpClick(ed, "tool.${t.name}", role = Role.RadioButton) { ed.proTool = t }
+            .helpClick(ed, "tool.${t.name}", role = Role.RadioButton, onDoubleClick = if (t == ProTool.Razor) ({ ed.cutAtPlayhead() }) else null) { ed.proTool = t }
             .testTag("pro_tool_${t.name.lowercase()}")
             .semantics {
                 contentDescription = "${t.label} tool (${t.key})"
@@ -703,6 +675,11 @@ private fun proShortcut(ed: EditorController, e: KeyEvent): Boolean {
         return when (e.key) {
             Key.Z -> {
                 if (shift) ed.redo() else ed.undo()
+                true
+            }
+            // Add Edit: cut at the playhead
+            Key.K -> {
+                ed.cutAtPlayhead()
                 true
             }
             else -> false
