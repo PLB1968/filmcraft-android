@@ -21,6 +21,7 @@ import io.github.artcraftandroid.filmcraft.engine.AppPrefs
 import io.github.artcraftandroid.filmcraft.engine.Engine
 import io.github.artcraftandroid.filmcraft.engine.ProjectEntry
 import io.github.artcraftandroid.filmcraft.engine.Projects
+import io.github.artcraftandroid.filmcraft.engine.ProxyMaker
 import io.github.artcraftandroid.filmcraft.engine.userMessage
 import io.github.artcraftandroid.filmcraft.ui.editor.EditorController
 import io.github.artcraftandroid.filmcraft.ui.editor.EditorHost
@@ -240,7 +241,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         opening = true
         try {
             val entry = withContext(Dispatchers.IO) { projects.touch(p) }
-            val ed = EditorController(e, entry, projects, viewModelScope, this, proDefault = proModeDefault, prefs = prefs)
+            val ed = EditorController(e, entry, projects, viewModelScope, this, proDefault = proModeDefault, prefs = prefs, proxyMaker = ProxyMaker(getApplication<Application>()))
             ed.load(fresh)
             editor = ed
             screen = Screen.Editor

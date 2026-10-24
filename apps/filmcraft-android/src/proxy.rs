@@ -1,7 +1,10 @@
-//! Proxies for smooth playback: small ProRes copies of the project's videos that the monitors
-//! play instead of the originals (exports always read the originals).
+//! Proxies for smooth playback: small copies of the project's videos that the monitors play
+//! instead of the originals (exports always read the originals).
 //!
-//! The phone makes one proxy at a time, in the background, from a queue kept here. A finished
+//! The phone makes one proxy at a time, in the background, from a queue kept here: with its own
+//! video hardware when the app can ([`ProxyStatus::app_work`], an H.264 or HEVC file made by the
+//! app), else with the engine (a ProRes file, much slower: every 4K frame is decoded in
+//! software). A video the hardware can't convert is made by the engine instead. A finished
 //! proxy is attached without an undo step: Undo takes back edits, not the copies made to play
 //! them, so it is set on every undo and redo snapshot of the project too. Jobs are matched to
 //! their media by the file's path, so a proxy that finishes after another project was opened
@@ -11,7 +14,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use filmcraft_engine::Session;
+use filmcraft_engine::{Session, proxies};
 use filmcraft_media::MediaKind;
 use filmcraft_project::{ItemId, ItemKind, MediaRef, Project};
 use serde_json::json;
@@ -19,7 +22,8 @@ use serde_json::json;
 use crate::MobileError;
 use crate::edits::ex;
 
-/// Small (a quarter of the size) and quick to decode: every frame stands alone.
+/// The engine's proxies: small (a quarter of the size) and quick to decode, as every frame
+/// stands alone.
 const PRESET: &str = "prores_proxy_quarter";
 
 /// Made without asking for videos at least this big on their long side (HD and up).
@@ -32,13 +36,31 @@ pub(crate) struct ProxyQueue {
     waiting: VecDeque<String>,
     /// Failed, or removed by hand: not made again without being asked.
     skip: HashSet<String>,
+    /// The phone's hardware couldn't convert these: the engine makes them.
+    engine_only: HashSet<String>,
 }
 
 struct Running {
-    job: u64,
+    worker: Worker,
     media: String,
     out: String,
     name: String,
+}
+
+enum Worker {
+    /// An engine job (its id).
+    Engine(u64),
+    /// The app, with the phone's video hardware; how far along it last said.
+    App(f64),
+}
+
+/// A proxy for the app to make with the phone's video hardware: convert `media` to `out`,
+/// then report with `proxy_done`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ProxyWork {
+    pub item: u64,
+    pub media: String,
+    pub out: String,
 }
 
 /// How proxies are coming along.
@@ -57,6 +79,8 @@ pub struct ProxyStatus {
     pub waiting: Vec<u64>,
     /// Problems to tell the user.
     pub messages: Vec<String>,
+    /// The proxy the app is to make now (the same one until it reports it done).
+    pub app_work: Option<ProxyWork>,
 }
 
 /// The file path of item `id` when it is a video file.
@@ -125,7 +149,7 @@ impl ProxyQueue {
         let Some(path) = video_path(&s.project, ItemId(item)) else { return };
         self.waiting.retain(|w| *w != path);
         if let Some(r) = self.running.take_if(|r| r.media == path) {
-            cancel(s, r.job);
+            cancel(s, &r);
         }
         self.skip.insert(path.clone());
         let file = match s.project.item(ItemId(item)).map(|i| &i.kind) {
@@ -141,19 +165,49 @@ impl ProxyQueue {
         }
     }
 
-    /// Move things along: attach a finished proxy, queue new videos (when `auto`), start the next.
-    pub(crate) fn tick(&mut self, s: &mut Session, auto: bool) -> ProxyStatus {
+    /// How far the app has got with the proxy of `media` (0..1).
+    pub(crate) fn app_progress(&mut self, media: &str, progress: f64) {
+        if let Some(Running { worker: Worker::App(p), media: m, .. }) = &mut self.running
+            && m == media
+        {
+            *p = progress.clamp(0.0, 1.0);
+        }
+    }
+
+    /// The app finished the proxy of `media`: attach it (`ok`), or have the engine make it.
+    /// Returns whether a proxy was attached.
+    pub(crate) fn app_done(&mut self, s: &mut Session, media: &str, ok: bool) -> bool {
+        let Some(r) = self.running.take_if(|r| matches!(r.worker, Worker::App(_)) && r.media == media) else { return false };
+        if ok && std::path::Path::new(&r.out).is_file() {
+            return set_quietly(s, &r.media, Some(&r.out));
+        }
+        let _ = std::fs::remove_file(&r.out);
+        log::warn!("the phone couldn't make a proxy of {}: the engine makes it", r.name);
+        self.engine_only.insert(r.media.clone());
+        self.waiting.push_front(r.media);
+        false
+    }
+
+    /// Move things along: attach a finished proxy, queue new videos (when `auto`), start the next
+    /// (for the app to make with the phone's video hardware when `hardware`).
+    pub(crate) fn tick(&mut self, s: &mut Session, auto: bool, hardware: bool) -> ProxyStatus {
         let mut messages = Vec::new();
         let mut attached = false;
         let mut progress = 0.0;
         // the proxy being made: still going (how far), or done (its outcome)
-        let done = self.running.as_ref().and_then(|r| match s.jobs.iter().find(|j| j.id == r.job) {
-            Some(j) if !j.progress.finished.load(Ordering::Relaxed) => {
-                let total = j.progress.total.load(Ordering::Relaxed).max(1);
-                progress = (j.progress.done.load(Ordering::Relaxed) as f64 / total as f64).clamp(0.0, 1.0);
+        let done = self.running.as_ref().and_then(|r| match r.worker {
+            Worker::App(p) => {
+                progress = p;
                 None
             }
-            job => Some(job.and_then(|j| j.progress.error.lock().unwrap_or_else(|e| e.into_inner()).clone())),
+            Worker::Engine(job) => match s.jobs.iter().find(|j| j.id == job) {
+                Some(j) if !j.progress.finished.load(Ordering::Relaxed) => {
+                    let total = j.progress.total.load(Ordering::Relaxed).max(1);
+                    progress = (j.progress.done.load(Ordering::Relaxed) as f64 / total as f64).clamp(0.0, 1.0);
+                    None
+                }
+                job => Some(job.and_then(|j| j.progress.error.lock().unwrap_or_else(|e| e.into_inner()).clone())),
+            },
         });
         if let Some(error) = done
             && let Some(r) = self.running.take()
@@ -193,9 +247,18 @@ impl ProxyQueue {
                 continue;
             }
             let name = s.project.item(id).map(|i| i.name.clone()).unwrap_or_default();
+            if hardware && !self.engine_only.contains(&path) {
+                let stem = std::path::Path::new(&path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| name.clone());
+                let dir = proxies::proxy_dir(&path, None);
+                let out = proxies::unique_path(&dir, &stem, "_Proxy", "mp4", &[]).to_string_lossy().into_owned();
+                if std::fs::create_dir_all(&dir).is_ok() {
+                    self.running = Some(Running { worker: Worker::App(0.0), media: path, out, name });
+                    continue;
+                }
+            }
             match ex(s, "media.createProxies", json!({"items": [id.0], "preset": PRESET, "attach": false})) {
                 Ok(v) => match (v["job"].as_u64(), v["outputs"][0]["path"].as_str()) {
-                    (Some(job), Some(out)) => self.running = Some(Running { job, media: path, out: out.to_string(), name }),
+                    (Some(job), Some(out)) => self.running = Some(Running { worker: Worker::Engine(job), media: path, out: out.to_string(), name }),
                     _ => {
                         self.skip.insert(path);
                     }
@@ -216,6 +279,11 @@ impl ProxyQueue {
             progress,
             waiting: self.waiting.iter().filter_map(|w| item_of(p, w)).map(|i| i.0).collect(),
             messages,
+            app_work: self
+                .running
+                .as_ref()
+                .filter(|r| matches!(r.worker, Worker::App(_)))
+                .and_then(|r| Some(ProxyWork { item: item_of(p, &r.media)?.0, media: r.media.clone(), out: r.out.clone() })),
         }
     }
 
@@ -223,14 +291,18 @@ impl ProxyQueue {
     pub(crate) fn clear(&mut self, s: &Session) {
         self.waiting.clear();
         // a cancelled job deletes its unfinished file itself
+        // (the app stops its own when its work is no longer asked for)
         if let Some(r) = self.running.take() {
-            cancel(s, r.job);
+            cancel(s, &r);
         }
     }
 }
 
-fn cancel(s: &Session, job: u64) {
-    if let Some(j) = s.jobs.iter().find(|j| j.id == job) {
+/// Stop an engine job making a proxy.
+fn cancel(s: &Session, r: &Running) {
+    if let Worker::Engine(job) = r.worker
+        && let Some(j) = s.jobs.iter().find(|j| j.id == job)
+    {
         j.progress.cancel.store(true, Ordering::Relaxed);
     }
 }

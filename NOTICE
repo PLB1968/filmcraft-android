@@ -33,4 +33,4 @@ Android app (apps/filmcraft-android):
   generator of the Kotlin bindings (generated at build time, not committed).
 - JNA (https://github.com/java-native-access/jna) — Apache-2.0 (dual-licensed with LGPL-2.1; used
   under Apache-2.0).
-- AndroidX, Jetpack Compose, ExifInterface and kotlinx.coroutines — Apache-2.0.
+- AndroidX, Jetpack Compose, ExifInterface, Media3 (Transformer, for proxies) and kotlinx.coroutines — Apache-2.0.

@@ -291,7 +291,8 @@ private fun Divider(horizontal: Boolean, description: String, onDrag: (Float) ->
     // the gesture outlives a frame: it calls the latest onDrag, which sees the size as it is now
     val drag by rememberUpdatedState(onDrag)
     Box(
-        (if (horizontal) Modifier.fillMaxWidth().height(14.dp) else Modifier.width(14.dp).fillMaxHeight())
+        // tall enough to grab with a thumb without catching the buttons beside it
+        (if (horizontal) Modifier.fillMaxWidth().height(24.dp) else Modifier.width(20.dp).fillMaxHeight())
             .background(Fc.Black)
             .pointerInput(horizontal) {
                 if (horizontal) {
@@ -309,7 +310,7 @@ private fun Divider(horizontal: Boolean, description: String, onDrag: (Float) ->
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(if (horizontal) 32.dp else 4.dp, if (horizontal) 4.dp else 32.dp).clip(CircleShape).background(Fc.Detail))
+        Box(Modifier.size(if (horizontal) 48.dp else 5.dp, if (horizontal) 5.dp else 48.dp).clip(CircleShape).background(Fc.Detail))
     }
 }
 

@@ -812,9 +812,25 @@ impl MobileSession {
     /// Move proxies along (call every second or so while [`ProxyStatus::busy`], and after
     /// imports): attaches finished ones, starts the next, and with `auto` queues every HD or
     /// bigger video that has none.
-    pub fn proxy_tick(&self, auto: bool) -> ProxyStatus {
+    ///
+    /// With `hardware` the app makes the proxies itself with the phone's video hardware
+    /// ([`ProxyStatus::app_work`]), reporting with [`MobileSession::proxy_progress`] and
+    /// [`MobileSession::proxy_done`].
+    pub fn proxy_tick(&self, auto: bool, hardware: bool) -> ProxyStatus {
         let mut s = self.lock();
-        self.proxy_queue().tick(&mut s, auto)
+        self.proxy_queue().tick(&mut s, auto, hardware)
+    }
+
+    /// How far the app has got with the proxy of `media` (0..1).
+    pub fn proxy_progress(&self, media: String, progress: f64) {
+        self.proxy_queue().app_progress(&media, progress);
+    }
+
+    /// The app finished the proxy of `media`: attached when `ok` (returns whether the project
+    /// changed); else the engine makes it instead.
+    pub fn proxy_done(&self, media: String, ok: bool) -> bool {
+        let mut s = self.lock();
+        self.proxy_queue().app_done(&mut s, &media, ok)
     }
 
     /// Make proxies of these Project panel items (Create Proxies).

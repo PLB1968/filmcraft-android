@@ -1603,7 +1603,7 @@ fn crossfades_left_without_a_cut_go_with_the_edit_that_left_them() {
 fn make_proxies(m: &MobileSession, auto: bool) -> bool {
     let mut attached = false;
     for _ in 0..2400 {
-        let st = m.proxy_tick(auto);
+        let st = m.proxy_tick(auto, false);
         attached |= st.attached;
         assert!(st.messages.is_empty(), "{:?}", st.messages);
         if !st.busy {
@@ -1627,7 +1627,7 @@ fn proxies_are_made_one_at_a_time_and_attached_without_an_undo_step() {
     assert!(m.create_proxies(vec![still]).is_err());
     let label = m.poll().undo_label;
     m.create_proxies(videos.clone()).unwrap();
-    let st = m.proxy_tick(false);
+    let st = m.proxy_tick(false, false);
     assert!(st.busy && st.making == Some(videos[0]) && st.waiting == vec![videos[1]], "{st:?}");
     assert!(make_proxies(&m, false));
     let bin = m.project_bin();
@@ -1639,10 +1639,10 @@ fn proxies_are_made_one_at_a_time_and_attached_without_an_undo_step() {
     m.redo();
     // the monitors play the proxy; the picture is still the whole frame
     m.set_use_proxies(true);
-    assert!(m.proxy_tick(false).enabled);
+    assert!(m.proxy_tick(false, false).enabled);
     // and still do after a save (which notes the project as recent and so sets the preferences)
     m.save_project(d.join("p.fcproj").to_string_lossy().into_owned()).unwrap();
-    assert!(m.proxy_tick(false).enabled, "a save keeps proxies on");
+    assert!(m.proxy_tick(false, false).enabled, "a save keeps proxies on");
     let f = m.renderer().unwrap().frame(SEC / 2, 360, true, None).unwrap();
     assert!(f.width > 0 && f.height > 0);
     // removed by hand: its file goes, and it isn't made again on its own
@@ -1661,4 +1661,35 @@ fn proxies_are_made_one_at_a_time_and_attached_without_an_undo_step() {
     assert!(!Path::new(&file).exists());
     assert!(!m.project_bin().iter().any(|b| b.id == videos[0] && b.has_proxy));
     assert!(!make_proxies(&m, true));
+}
+
+#[test]
+fn the_app_makes_proxies_with_the_phones_hardware_and_the_engine_takes_over_when_it_cant() {
+    let (m, _d, _) = two_clips();
+    let videos: Vec<u64> = m.project_bin().iter().filter(|b| b.has_video).map(|b| b.id).collect();
+    let path_of = |id: u64| m.project_bin().into_iter().find(|b| b.id == id).map(|b| b.path).unwrap();
+    m.create_proxies(videos.clone()).unwrap();
+    // the first goes to the app, and stays its work until it reports back
+    let st = m.proxy_tick(false, true);
+    let w = st.app_work.clone().expect("work for the app");
+    assert_eq!((w.item, w.media.as_str()), (videos[0], path_of(videos[0]).as_str()));
+    assert!(w.out.ends_with(".mp4") && w.out.contains("Proxies"), "{}", w.out);
+    m.proxy_progress(w.media.clone(), 0.5);
+    let st = m.proxy_tick(false, true);
+    assert_eq!((st.app_work.as_ref(), st.making, st.progress), (Some(&w), Some(videos[0]), 0.5));
+    // done: the file (here a copy of the original) is attached, with no undo step
+    let label = m.poll().undo_label;
+    std::fs::copy(&w.media, &w.out).unwrap();
+    assert!(m.proxy_done(w.media.clone(), true));
+    assert!(m.project_bin().iter().any(|b| b.id == videos[0] && b.has_proxy));
+    assert_eq!(m.poll().undo_label, label);
+    // the second fails on the phone's hardware: the engine makes it instead
+    let w2 = m.proxy_tick(false, true).app_work.expect("the next one");
+    assert_eq!(w2.item, videos[1]);
+    assert!(!m.proxy_done(w2.media.clone(), false));
+    assert!(m.proxy_tick(false, true).app_work.is_none(), "the engine has it now");
+    assert!(make_proxies(&m, false));
+    assert!(m.project_bin().iter().filter(|b| videos.contains(&b.id)).all(|b| b.has_proxy));
+    // a stale report changes nothing
+    assert!(!m.proxy_done(w.media, true));
 }

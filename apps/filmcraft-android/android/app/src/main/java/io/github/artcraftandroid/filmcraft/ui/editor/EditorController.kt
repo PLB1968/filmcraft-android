@@ -39,6 +39,7 @@ import io.github.artcraftandroid.filmcraft.core.TransitionInfo
 import io.github.artcraftandroid.filmcraft.engine.AppPrefs
 import io.github.artcraftandroid.filmcraft.engine.Engine
 import io.github.artcraftandroid.filmcraft.engine.ProjectEntry
+import io.github.artcraftandroid.filmcraft.engine.ProxyMaker
 import io.github.artcraftandroid.filmcraft.engine.Projects
 import io.github.artcraftandroid.filmcraft.engine.intoBitmap
 import io.github.artcraftandroid.filmcraft.engine.toBitmap
@@ -133,6 +134,8 @@ class EditorController(
     private val host: EditorHost,
     proDefault: Boolean = false,
     private val prefs: AppPrefs? = null,
+    /** Makes proxies with the phone's video hardware (else the engine makes them, slowly). */
+    private val proxyMaker: ProxyMaker? = null,
 ) {
     private val session: MobileSession get() = engine.session
 
@@ -303,15 +306,36 @@ class EditorController(
         if (closed || proxyLoop?.isActive == true) return
         proxyLoop = scope.launch {
             while (isActive && !closed) {
-                val st = runCatching { engine.command { proxyTick(prefs?.autoProxies ?: true) } }.getOrNull() ?: break
+                val mk = proxyMaker
+                val making = mk?.media
+                val done = mk?.progress()
+                if (making != null && done != null) runCatching { engine.command { proxyProgress(making, done) } }
+                val st = runCatching { engine.command { proxyTick(prefs?.autoProxies ?: true, mk != null) } }.getOrNull() ?: break
                 proxies = st
                 st.messages.forEach { host.tell(it) }
+                // the proxy the phone's hardware is to make: start it, or stop one no longer wanted
+                val w = st.appWork
+                if (mk != null) {
+                    if (w == null) {
+                        if (mk.media != null) mk.cancel()
+                    } else if (mk.media != w.media) {
+                        mk.start(w) { ok -> scope.launch { proxyMade(w.media, ok) } }
+                    }
+                }
                 // a proxy was attached: a new renderer plays it
                 if (st.attached) refresh()
                 if (!st.busy) break
                 delay(1000)
             }
         }
+    }
+
+    /** The phone's hardware finished a proxy (or couldn't: then the engine makes it). */
+    private suspend fun proxyMade(media: String, ok: Boolean) {
+        val attached = runCatching { engine.command { proxyDone(media, ok) } }.getOrDefault(false)
+        proxyMaker?.forget()
+        if (attached) refresh()
+        watchProxies()
     }
 
     fun toggleProxies() {
@@ -387,6 +411,7 @@ class EditorController(
         stop()
         closed = true
         proxyLoop?.cancel()
+        proxyMaker?.cancel()
         runCatching { engine.command { stopProxies() } }
         captionJob?.let { job -> runCatching { engine.command { cancelCaptions(job) } } }
         saveJob?.cancel()
