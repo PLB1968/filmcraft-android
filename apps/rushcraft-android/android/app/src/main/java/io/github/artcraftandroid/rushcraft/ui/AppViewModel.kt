@@ -73,6 +73,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         prefs.autoProxies = on
     }
 
+    /** Settings › Hardware decoding: the phone's video decoders play footage (else the engine's). */
+    var hardwareDecoding by mutableStateOf(prefs.hardwareDecoding)
+        private set
+
+    fun changeHardwareDecoding(on: Boolean) {
+        hardwareDecoding = on
+        prefs.hardwareDecoding = on
+        editor?.let { ed -> viewModelScope.launch { runCatching { ed.engine.command { setHardwareDecoding(on) } } } }
+    }
+
     var screen by mutableStateOf(Screen.Home)
         private set
     var projectList by mutableStateOf<List<ProjectEntry>>(emptyList())

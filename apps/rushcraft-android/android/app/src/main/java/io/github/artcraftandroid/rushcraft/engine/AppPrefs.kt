@@ -17,8 +17,14 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(USE_PROXIES, true)
         set(v) = prefs.edit().putBoolean(USE_PROXIES, v).apply()
 
+    /** The phone's own video decoders play H.264 and HEVC (Settings › Hardware decoding). */
+    var hardwareDecoding: Boolean
+        get() = prefs.getBoolean(HARDWARE_DECODING, true)
+        set(v) = prefs.edit().putBoolean(HARDWARE_DECODING, v).apply()
+
     private companion object {
         const val AUTO_PROXIES = "autoProxies"
         const val USE_PROXIES = "useProxies"
+        const val HARDWARE_DECODING = "hardwareDecoding"
     }
 }

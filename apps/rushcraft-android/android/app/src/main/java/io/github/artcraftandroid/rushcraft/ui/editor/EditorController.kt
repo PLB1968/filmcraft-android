@@ -261,7 +261,10 @@ class EditorController(
         playhead = t.playhead
         if (proMode) refreshPro()
         refreshStatus()
-        engine.command { setUseProxies(useProxies) }
+        engine.command {
+            setUseProxies(useProxies)
+            setHardwareDecoding(prefs?.hardwareDecoding ?: true)
+        }
         newRenderer()
         if (fresh) save()
         lastSaved = t.revision.toLong()

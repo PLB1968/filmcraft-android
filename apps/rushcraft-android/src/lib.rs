@@ -26,6 +26,7 @@ use serde_json::{Value, json};
 
 pub mod edits;
 pub mod export;
+mod mediacodec;
 pub mod model;
 pub mod placement;
 pub mod presets;
@@ -259,6 +260,7 @@ fn phone_prefs(s: &mut Session) {
 impl MobileSession {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
+        mediacodec::register();
         let m = Self::default();
         phone_prefs(&mut m.lock());
         Arc::new(m)
@@ -877,6 +879,16 @@ impl MobileSession {
     pub fn stop_proxies(&self) {
         let s = self.lock();
         self.proxy_queue().clear(&s);
+    }
+
+    /// Settings › Hardware decoding: the phone's own video decoders play H.264 and HEVC (on), or
+    /// the engine's software ones do (off). Decoders already open keep going until their media
+    /// is opened again.
+    pub fn set_hardware_decoding(&self, on: bool) {
+        let mut s = self.lock();
+        // kept in the preferences too, which the engine applies whenever they change
+        s.prefs.playback.hardware_decoding = if on { "auto" } else { "off" }.into();
+        mediacodec::set_enabled(on);
     }
 
     /// Toggle Proxies: the monitors play the proxies (on) or the originals. Exports always use

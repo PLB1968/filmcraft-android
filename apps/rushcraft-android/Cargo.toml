@@ -24,6 +24,10 @@ filmcraft-edit = { workspace = true }
 filmcraft-text = { workspace = true }
 filmcraft-geom = { workspace = true }
 filmcraft-frame = { workspace = true }
+# the phone's hardware video decoders plug into the engine's (src/mediacodec.rs)
+filmcraft-codecs = { workspace = true }
+filmcraft-isobmff = { workspace = true }
+filmcraft-color = { workspace = true }
 # on-device captions (Whisper) and natural voices (Kokoro), both pure Rust on the CPU; the models
 # are downloaded by the app on first use, never shipped
 filmcraft-speech = { workspace = true, features = ["whisper"] }
@@ -38,3 +42,5 @@ uniffi = { version = "=0.32.2", default-features = false }
 # the engine's log in logcat (pure Rust; links the system's liblog)
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = { version = "0.15", default-features = false }
+# MediaCodec for hardware video decoding (src/mediacodec.rs): safe bindings, MIT OR Apache-2.0
+ndk = { version = "0.9", default-features = false, features = ["media"] }

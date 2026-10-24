@@ -145,6 +145,13 @@ fun SettingsScreen(vm: AppViewModel) {
             { vm.changeAutoProxies(it) },
             tag = "settings_auto_proxies",
         )
+        SwitchRow(
+            "Hardware decoding",
+            "Play H.264 and HEVC video with the phone's own video decoder: smooth 4K before its proxy is ready. Turn it off if a video shows wrong colours or glitches. A video picks the change up when it is opened again.",
+            vm.hardwareDecoding,
+            { vm.changeHardwareDecoding(it) },
+            tag = "settings_hardware_decoding",
+        )
         Spacer(Modifier.height(8.dp))
         Row48("About Rushcraft") { vm.show(Screen.About) }
         if (stored.isNotEmpty()) {
