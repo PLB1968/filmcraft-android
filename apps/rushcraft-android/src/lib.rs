@@ -791,6 +791,27 @@ impl MobileSession {
         self.pro_edit(|s| pro::razor(s, time, clip, track))
     }
 
+    /// Set a clip's Volume to `db` all through (its volume line dragged, no keyframes).
+    pub fn set_level(&self, clip: u64, db: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::set_level(s, clip, db))
+    }
+
+    /// Put a Volume keyframe on a clip at sequence time `time`; `from` moves the one there instead.
+    pub fn volume_key(&self, clip: u64, time: i64, db: f64, from: Option<i64>) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::volume_key(s, clip, time, db, from))
+    }
+
+    /// Take away a clip's Volume keyframe nearest sequence time `time`.
+    pub fn delete_volume_key(&self, clip: u64, time: i64) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::delete_volume_key(s, clip, time))
+    }
+
+    /// Duck these music clips `reduce_db` under every other sound (dialogue, voice-over, a
+    /// video's own sound). Returns how many Volume keyframes were made.
+    pub fn duck_music(&self, clips: Vec<u64>, reduce_db: f64) -> Result<u32, MobileError> {
+        self.pro_edit(|s| pro::duck_music(s, &clips, reduce_db))
+    }
+
     /// Cut at the playhead: the selected clips under it (and their partners), else every
     /// track. Returns how many cuts were made.
     pub fn cut_at_playhead(&self) -> Result<u32, MobileError> {

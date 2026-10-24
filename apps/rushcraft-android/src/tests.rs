@@ -1723,3 +1723,38 @@ fn a_cut_selects_the_clip_before_it_and_cut_at_playhead_cuts_the_selection_else_
     m.set_playhead(0);
     assert_eq!(m.cut_at_playhead().unwrap(), 0);
 }
+
+#[test]
+fn the_volume_line_sets_levels_and_keyframes_and_music_ducks_under_other_sound() {
+    let (m, d, _) = two_clips();
+    let audio = |m: &MobileSession| m.pro_timeline().unwrap().clips.into_iter().filter(|c| c.kind == ClipKind::Audio).collect::<Vec<_>>();
+    let a = audio(&m)[0].clone();
+    assert_eq!((a.level_db, a.volume_keys.len()), (0.0, 0));
+    // dragging the line: one level all through
+    m.set_level(a.id, -6.0).unwrap();
+    assert_eq!(pclip(&m, a.id).level_db, -6.0);
+    // keyframes: add two, move one, delete one
+    m.volume_key(a.id, a.start + SEC / 4, -6.0, None).unwrap();
+    m.volume_key(a.id, a.start + SEC, -20.0, None).unwrap();
+    let k = pclip(&m, a.id).volume_keys;
+    assert_eq!(k.len(), 2, "{k:?}");
+    assert!((k[1].time - (a.start + SEC)).abs() <= SEC / 100 && (k[1].db + 20.0).abs() < 1e-6, "{k:?}");
+    m.volume_key(a.id, a.start + SEC + SEC / 2, -30.0, Some(k[1].time)).unwrap();
+    let k = pclip(&m, a.id).volume_keys;
+    assert_eq!(k.len(), 2);
+    assert!((k[1].time - (a.start + SEC + SEC / 2)).abs() <= SEC / 100 && (k[1].db + 30.0).abs() < 1e-6, "{k:?}");
+    m.delete_volume_key(a.id, k[0].time).unwrap();
+    m.delete_volume_key(a.id, k[1].time).unwrap();
+    let c = pclip(&m, a.id);
+    assert_eq!((c.volume_keys.len(), c.level_db), (0, -30.0), "the last keyframe's level stays");
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Delete Volume Keyframe"));
+    // music under the clips' own sound ducks
+    let before: Vec<u64> = audio(&m).iter().map(|c| c.id).collect();
+    m.add_media(vec![tone(&d, 3.0)]).unwrap();
+    let music = audio(&m).into_iter().find(|c| !before.contains(&c.id)).expect("the tone is on an audio track");
+    assert!(m.duck_music(vec![music.id], -15.0).unwrap() > 0);
+    let k = pclip(&m, music.id).volume_keys;
+    assert!(k.iter().any(|k| k.db <= -14.0), "{k:?}");
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Duck Under Dialogue"), "one step");
+    assert!(m.duck_music(vec![], -15.0).is_err());
+}

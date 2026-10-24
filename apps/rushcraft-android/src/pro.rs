@@ -66,6 +66,17 @@ pub struct ProClip {
     pub selected: bool,
     /// Where its keyframes are on the sequence (shown as marks on the clip).
     pub keyframes: Vec<i64>,
+    /// Its Volume level (dB) when it isn't animated; the level at its start when it is.
+    pub level_db: f64,
+    /// Its Volume keyframes on the sequence (the timeline's volume line), oldest first.
+    pub volume_keys: Vec<VolumeKey>,
+}
+
+/// A Volume keyframe: where on the sequence and how loud (dB).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct VolumeKey {
+    pub time: i64,
+    pub db: f64,
 }
 
 /// A sequence marker.
@@ -187,6 +198,8 @@ fn clips_of(s: &Session, seq: &Sequence) -> Vec<ProClip> {
                     link: c.link,
                     selected: s.state.selection.contains(&c.id),
                     keyframes: keyframe_times(c),
+                    level_db: volume_of(c).0,
+                    volume_keys: volume_of(c).1,
                 });
             }
         }
@@ -1040,6 +1053,96 @@ pub(crate) fn keyframe_times(c: &TrackItem) -> Vec<i64> {
     t.sort_unstable();
     t.dedup();
     t
+}
+
+// ---- the volume line and ducking ----
+
+/// Clip `c`'s Volume level (dB, at its start when animated) and keyframes on the sequence.
+fn volume_of(c: &TrackItem) -> (f64, Vec<VolumeKey>) {
+    let Some(p) = c.effect("volume").and_then(|e| e.param("level")) else { return (0.0, Vec::new()) };
+    let keys: Vec<VolumeKey> = p
+        .keyframes
+        .iter()
+        .filter_map(|k| Some(VolumeKey { time: sequence_time_of(c, k.time), db: k.value.as_f64()? }))
+        .filter(|k| k.time >= c.start.0 && k.time <= c.end().0)
+        .collect();
+    let level = if p.is_animated() { p.value_at(c.source_time_at(c.start)).as_f64().unwrap_or(0.0) } else { p.value.as_f64().unwrap_or(0.0) };
+    (level, keys)
+}
+
+/// The lowest and highest Volume levels the timeline sets (dB).
+const LEVEL_RANGE: (f64, f64) = (-60.0, 15.0);
+
+/// Change clip `clip`'s Volume with `f` (its level parameter and the clip), as one undo step.
+fn edit_level(s: &mut Session, clip: u64, label: &str, f: impl FnOnce(&mut filmcraft_project::Param, &TrackItem)) -> Result<(), MobileError> {
+    s.edit_sequence(label, |q, _, _| {
+        let c =
+            q.find_item_mut(ClipId(clip)).map(|x| x.1).ok_or_else(|| filmcraft_engine::EngineError::Other("That clip is no longer on the timeline.".into()))?;
+        let at = c.clone();
+        let p =
+            c.effect_mut("volume").and_then(|e| e.param_mut("level")).ok_or_else(|| filmcraft_engine::EngineError::Other("That clip has no sound.".into()))?;
+        f(p, &at);
+        Ok(())
+    })?;
+    settle(s);
+    Ok(())
+}
+
+/// Set clip `clip`'s Volume to `db` all through (dragging its volume line with no keyframes).
+pub(crate) fn set_level(s: &mut Session, clip: u64, db: f64) -> Result<(), MobileError> {
+    let db = db.clamp(LEVEL_RANGE.0, LEVEL_RANGE.1);
+    edit_level(s, clip, "Volume", |p, _| {
+        p.keyframes.clear();
+        p.value = filmcraft_project::ParamValue::Float(db);
+    })
+}
+
+/// Put a Volume keyframe on clip `clip` at sequence time `time`, `db` loud; `from` moves the one
+/// at that time there instead of adding one.
+pub(crate) fn volume_key(s: &mut Session, clip: u64, time: i64, db: f64, from: Option<i64>) -> Result<(), MobileError> {
+    let db = db.clamp(LEVEL_RANGE.0, LEVEL_RANGE.1);
+    edit_level(s, clip, if from.is_some() { "Move Volume Keyframe" } else { "Add Volume Keyframe" }, |p, c| {
+        let mt = |t: i64| c.source_time_at(Tick(t).clamp(c.start, (c.end() - Tick(1)).max(c.start)));
+        if let Some(f) = from {
+            // the keyframe nearest `from` (sequence times round to media ticks)
+            if let Some(k) = p.keyframes.iter().min_by_key(|k| (sequence_time_of(c, k.time) - f).abs()).map(|k| k.time) {
+                p.remove_keyframe_at(k);
+            }
+        }
+        p.put_keyframe(mt(time), filmcraft_project::ParamValue::Float(db));
+    })
+}
+
+/// Take away clip `clip`'s Volume keyframe nearest sequence time `time` (the level there stays
+/// when it was the last one).
+pub(crate) fn delete_volume_key(s: &mut Session, clip: u64, time: i64) -> Result<(), MobileError> {
+    edit_level(s, clip, "Delete Volume Keyframe", |p, c| {
+        let Some(k) = p.keyframes.iter().min_by_key(|k| (sequence_time_of(c, k.time) - time).abs()).cloned() else { return };
+        p.remove_keyframe_at(k.time);
+        if p.keyframes.is_empty() {
+            p.value = k.value;
+        }
+    })
+}
+
+/// Duck music under dialogue: `clips` become Music and get Volume keyframes that lower them
+/// `reduce_db` wherever another sound plays (speech, a voice-over, a video's own sound). One undo
+/// step; returns how many keyframes were made.
+pub(crate) fn duck_music(s: &mut Session, clips: &[u64], reduce_db: f64) -> Result<u32, MobileError> {
+    if clips.is_empty() {
+        return Err(MobileError::Command("Pick the music to duck.".into()));
+    }
+    let r = s.edit_group("Duck Under Dialogue", |s| {
+        s.execute("essentialSound.setType", json!({ "clips": clips, "type": "music" }))?;
+        s.execute(
+            "essentialSound.set",
+            json!({ "clips": clips, "values": { "ducking.enabled": true, "ducking.againstUntyped": true, "ducking.reduceDb": reduce_db.clamp(-40.0, -1.0) } }),
+        )?;
+        s.execute("essentialSound.generateDucking", json!({ "clips": clips }))
+    })?;
+    settle(s);
+    let n: usize = r["clips"].as_array().map(|a| a.iter().map(|c| c["keyframes"].as_array().map_or(0, Vec::len)).sum()).unwrap_or(0);
+    Ok(u32::try_from(n).unwrap_or(u32::MAX))
 }
 
 // ---- adding media where the timeline was double-tapped ----

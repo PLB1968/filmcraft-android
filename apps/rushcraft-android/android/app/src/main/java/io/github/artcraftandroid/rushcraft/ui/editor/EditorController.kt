@@ -980,6 +980,30 @@ class EditorController(
 
     fun proTrim(clip: ULong, head: Boolean, delta: Long, ripple: Boolean) = edit { trimEdge(clip, head, delta, ripple) }
 
+    /** A sound's Volume, all through (its volume line dragged with no keyframes). */
+    fun setLevel(clip: ULong, db: Double) = edit { setLevel(clip, db) }
+
+    /** A Volume keyframe at [at] (sequence time); [from] moves the keyframe there instead. */
+    fun volumeKey(clip: ULong, at: Long, db: Double, from: Long?) = edit { volumeKey(clip, at, db, from) }
+
+    fun deleteVolumeKey(clip: ULong, at: Long) = edit { deleteVolumeKey(clip, at) }
+
+    /** Duck this music (and the other selected sounds) under every other sound. */
+    fun duckMusic(clip: ULong) {
+        val sel = pro?.clips?.filter { it.selected && it.kind == ClipKind.AUDIO }?.map { it.id }.orEmpty()
+        val clips = (sel + clip).distinct()
+        stop()
+        scope.launch {
+            try {
+                val n = engine.command { duckMusic(clips, -15.0) }
+                host.tell(if (n == 0u) "There's no other sound under this music to duck it under." else "The music now dips under the other sound.")
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
+    }
+
     /** The edit point picked for one-frame trims ([nudgeTrim]); the Program monitor shows its frames. */
     var pickedEdge by mutableStateOf<PickedEdge?>(null)
 

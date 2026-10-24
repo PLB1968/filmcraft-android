@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.artcraftandroid.rushcraft.core.ClipKind
 import io.github.artcraftandroid.rushcraft.core.ProClip
+import io.github.artcraftandroid.rushcraft.core.VolumeKey
 import io.github.artcraftandroid.rushcraft.core.ProMarker
 import io.github.artcraftandroid.rushcraft.core.ProTimeline
 import io.github.artcraftandroid.rushcraft.core.ProTrack
@@ -255,7 +256,9 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                             onZoom = ::zoom,
                             onMenu = { at, clip ->
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                menu = ProMenu(at + Offset(headerPx, tracksTop), if (clip != null) clipMenu(ed, clip) else laneMenu(ed))
+                                val t = TimelineMath.snap(tOf(at.x), p.rateNum, p.rateDen)
+                                val key = clip?.volumeKeys?.filter { abs(xOf(it.time) - at.x) <= with(density) { 16.dp.toPx() } }?.minByOrNull { abs(xOf(it.time) - at.x) }
+                                menu = ProMenu(at + Offset(headerPx, tracksTop), if (clip != null) clipMenu(ed, clip, t, key) else laneMenu(ed))
                             },
                             onCut = { at, left, right ->
                                 val pos = at + Offset(headerPx, tracksTop)
@@ -711,7 +714,7 @@ private fun headerMenu(ed: EditorController, p: ProTimeline, t: ProTrack, compac
     return items
 }
 
-private fun clipMenu(ed: EditorController, c: ProClip): List<Pair<String, () -> Unit>> = listOf(
+private fun clipMenu(ed: EditorController, c: ProClip, at: Long, key: VolumeKey?): List<Pair<String, () -> Unit>> = listOf(
     "Clear" to {
         if (!c.selected) ed.proSelect(c.id)
         ed.deleteSelection(ripple = false)
@@ -722,6 +725,11 @@ private fun clipMenu(ed: EditorController, c: ProClip): List<Pair<String, () -> 
     },
     (if (c.selected) "Deselect" else "Add to Selection") to { ed.proSelect(c.id, add = true) },
     "Add Marker at Playhead" to { ed.addMarker() },
+) + if (c.kind != ClipKind.AUDIO) emptyList() else listOfNotNull(
+    "Add Volume Keyframe Here" to { ed.volumeKey(c.id, at.coerceIn(c.start, c.start + c.duration), levelAt(c, at), from = null) },
+    key?.let { k -> "Delete Volume Keyframe" to { ed.deleteVolumeKey(c.id, k.time) } },
+    if (c.volumeKeys.isNotEmpty()) "Remove Volume Keyframes" to { ed.setLevel(c.id, levelAt(c, at)) } else null,
+    "Duck Under Dialogue" to { ed.duckMusic(c.id) },
 )
 
 private fun laneMenu(ed: EditorController): List<Pair<String, () -> Unit>> = listOf(
@@ -732,10 +740,57 @@ private fun laneMenu(ed: EditorController): List<Pair<String, () -> Unit>> = lis
 )
 
 /** What a one-finger drag on a clip does, by the tool and where it began. */
-private enum class DragKind { Move, Trim, Ripple, Roll, Stretch, Slip, Slide, Forward }
+private enum class DragKind { Move, Trim, Ripple, Roll, Stretch, Slip, Slide, Forward, Volume }
 
 /** A drag on the tracks: what it does, to which clip (and edge), and the clips it takes along. */
-private data class ToolDrag(val kind: DragKind, val clip: ProClip, val head: Boolean, val partner: ProClip? = null, val group: List<ProClip> = emptyList())
+private data class ToolDrag(
+    val kind: DragKind,
+    val clip: ProClip,
+    val head: Boolean,
+    val partner: ProClip? = null,
+    val group: List<ProClip> = emptyList(),
+    /** A volume drag: the keyframe it moves (else the line), where it began and the line's height (px). */
+    val key: VolumeKey? = null,
+    val at: Long = 0L,
+    val span: Float = 1f,
+)
+
+/** The volume line spans these levels (dB), bottom to top, as the engine's own range. */
+private const val LEVEL_LOW = -60.0
+private const val LEVEL_HIGH = 15.0
+private val VolumeLineColor = Color(0xFFFFE08A)
+
+/** Where level [db] sits in a clip [h] px tall from [top]. */
+private fun levelY(db: Double, top: Float, h: Float): Float = top + h - ((db - LEVEL_LOW) / (LEVEL_HIGH - LEVEL_LOW)).coerceIn(0.0, 1.0).toFloat() * h
+
+/** Clip [c]'s Volume level at sequence time [t]: straight lines between its keyframes. */
+private fun levelAt(c: ProClip, t: Long): Double {
+    val k = c.volumeKeys
+    if (k.isEmpty()) return c.levelDb
+    if (t <= k.first().time) return k.first().db
+    if (t >= k.last().time) return k.last().db
+    val i = k.indexOfLast { it.time <= t }
+    val a = k[i]
+    val b = k[i + 1]
+    return if (b.time == a.time) b.db else a.db + (b.db - a.db) * (t - a.time).toDouble() / (b.time - a.time)
+}
+
+/** A clip's volume line: flat at [level] without keyframes, else through [keys], with dots on them. */
+private fun DrawScope.drawVolumeLine(c: ProClip, keys: List<VolumeKey>, level: Double, x0: Float, x1: Float, top: Float, h: Float, color: Color) {
+    if (x1 < 0f || x0 > size.width || c.duration <= 0) return
+    fun xOf(t: Long) = x0 + (t - c.start).toFloat() / c.duration * (x1 - x0)
+    val pts = if (keys.isEmpty()) {
+        listOf(Offset(x0, levelY(level, top, h)), Offset(x1, levelY(level, top, h)))
+    } else {
+        listOf(Offset(x0, levelY(keys.first().db, top, h))) + keys.map { Offset(xOf(it.time), levelY(it.db, top, h)) } + Offset(x1, levelY(keys.last().db, top, h))
+    }
+    for (i in 0 until pts.size - 1) drawLine(color, pts[i], pts[i + 1], 1.5.dp.toPx())
+    for (k in keys) {
+        val o = Offset(xOf(k.time), levelY(k.db, top, h))
+        drawCircle(Color.Black.copy(alpha = color.alpha), 4.5.dp.toPx(), o)
+        drawCircle(color, 3.dp.toPx(), o)
+    }
+}
 
 /** The picked edit point's bracket: yellow, apart from the white selection and the blue playhead. */
 private val PickedEdgeColor = Color(0xFFFFC83D)
@@ -785,7 +840,7 @@ private fun dragDelta(p: ProTimeline, playhead: Long, d: ToolDrag, dx: Float, pp
     val edges: List<Long> = when (d.kind) {
         DragKind.Trim, DragKind.Ripple, DragKind.Stretch, DragKind.Roll -> listOf(if (d.head) c.start else c.start + c.duration)
         DragKind.Slide, DragKind.Forward, DragKind.Move -> listOf(c.start, c.start + c.duration)
-        DragKind.Slip -> emptyList()
+        DragKind.Slip, DragKind.Volume -> emptyList()
     }
     if (p.snapping && edges.isNotEmpty()) {
         val moving = (listOf(c) + d.group + listOfNotNull(d.partner)).map { it.id }.toSet()
@@ -838,6 +893,7 @@ private fun dragDelta(p: ProTimeline, playhead: Long, d: ToolDrag, dx: Float, pp
             next?.let { delta = delta.coerceAtMost(it.duration - frame) }
         }
         DragKind.Forward, DragKind.Move -> delta = delta.coerceAtLeast(-(d.group.minOfOrNull { it.start } ?: c.start))
+        DragKind.Volume -> {}
     }
     return delta
 }
@@ -874,7 +930,7 @@ private fun dragGhosts(p: ProTimeline, d: ToolDrag, delta: Long): Map<ULong, Pai
             next?.let { out[it.id] = head(it, delta) }
         }
         DragKind.Forward -> for (o in d.group) out[o.id] = (o.start + delta) to o.duration
-        DragKind.Slip, DragKind.Move -> {}
+        DragKind.Slip, DragKind.Move, DragKind.Volume -> {}
     }
     return out
 }
@@ -911,7 +967,7 @@ private fun dragView(p: ProTimeline, d: ToolDrag, delta: Long): TrimView? {
             val right = next?.let { pic(it, mediaAt(it, c.start + c.duration + delta), "In") } ?: TrimFrame(null, 0, "In")
             TrimView(listOf(left, right), "Slide $by")
         }
-        DragKind.Forward, DragKind.Move -> null
+        DragKind.Forward, DragKind.Move, DragKind.Volume -> null
     }
 }
 
@@ -947,6 +1003,8 @@ private fun Tracks(
     var drag by remember { mutableStateOf<ToolDrag?>(null) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragY by remember { mutableFloatStateOf(0f) }
+    // where the drag began (y in the track stack): a volume drag's level follows the finger from it
+    var dragY0 by remember { mutableFloatStateOf(0f) }
     // the gesture reads these as they are now, not as they were when it began
     val pNow by rememberUpdatedState(p)
     val rowsNow by rememberUpdatedState(rows)
@@ -963,8 +1021,21 @@ private fun Tracks(
     fun rowAt(rows: List<ProRow>, y: Float) = rows.firstOrNull { y >= it.top && y < it.bottom }
     fun frameAt(x: Float): Long = TimelineMath.snap(tAt(x), pNow.rateNum, pNow.rateDen)
 
+    /** A drag on [c]'s volume line (or one of its keyframes) beginning at [x], [y]; null when not on it. */
+    fun volumeDrag(c: ProClip, row: ProRow, x: Float, y: Float): ToolDrag? = with(density) {
+        val top = row.top + 2.dp.toPx()
+        val h = row.height - 4.dp.toPx()
+        if (h < 16.dp.toPx()) return null
+        val t = tAt(x)
+        val key = c.volumeKeys
+            .filter { abs(xAt(it.time) - x) <= 16.dp.toPx() && abs(levelY(it.db, top, h) - y) <= 20.dp.toPx() }
+            .minByOrNull { abs(xAt(it.time) - x) }
+        if (key == null && abs(levelY(levelAt(c, t), top, h) - y) > 14.dp.toPx()) return null
+        ToolDrag(DragKind.Volume, c, false, key = key, at = frameAt(x), span = h)
+    }
+
     /** What a drag beginning at [x] on [c] does with the current tool (null: the view pans). */
-    fun startDrag(p: ProTimeline, c: ProClip, row: ProRow, x: Float): ToolDrag? {
+    fun startDrag(p: ProTimeline, c: ProClip, row: ProRow, x: Float, y: Float): ToolDrag? {
         if (row.track.locked) return null
         val x0 = xAt(c.start)
         val x1 = xAt(c.start + c.duration)
@@ -979,6 +1050,7 @@ private fun Tracks(
             ProTool.Selection -> when {
                 !c.selected -> null
                 edge != null -> ToolDrag(DragKind.Trim, c, edge)
+                c.kind == ClipKind.AUDIO -> volumeDrag(c, row, x, y) ?: ToolDrag(DragKind.Move, c, false)
                 else -> ToolDrag(DragKind.Move, c, false)
             }
             ProTool.RippleEdit -> edge?.let { ToolDrag(DragKind.Ripple, c, it) }
@@ -997,6 +1069,20 @@ private fun Tracks(
     /** Make a finished drag one edit. */
     fun commit(p: ProTimeline, d: ToolDrag, dx: Float, y: Float) {
         val c = d.clip
+        if (d.kind == DragKind.Volume) {
+            val dDb = -(y - dragY0) / d.span * (LEVEL_HIGH - LEVEL_LOW)
+            val k = d.key
+            val dt = TimelineMath.snap((dx / ppsNow() * TPS).roundToLong(), p.rateNum, p.rateDen)
+            if (abs(dDb) < 0.2 && (k == null || dt == 0L)) return
+            haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+            when {
+                k != null -> ed.volumeKey(c.id, (k.time + dt).coerceIn(c.start, c.start + c.duration), k.db + dDb, from = k.time)
+                c.volumeKeys.isEmpty() -> ed.setLevel(c.id, c.levelDb + dDb)
+                // a drag on the line between keyframes: a keyframe there, at the new level
+                else -> ed.volumeKey(c.id, d.at, levelAt(c, d.at) + dDb, from = null)
+            }
+            return
+        }
         if (d.kind == DragKind.Move) {
             val from = (p.videoTracks + p.audioTracks).firstOrNull { it.id == c.track }
             val to = rowAt(rowsNow, y)?.track?.takeIf { from != null && it.video == from.video } ?: from
@@ -1025,7 +1111,7 @@ private fun Tracks(
             DragKind.Slip -> ed.proSlip(c.id, -delta)
             DragKind.Slide -> ed.proSlide(c.id, delta)
             DragKind.Forward -> ed.proShift(d.group.map { it.id }, delta)
-            DragKind.Move -> {}
+            DragKind.Move, DragKind.Volume -> {}
         }
     }
 
@@ -1132,7 +1218,7 @@ private fun Tracks(
                             ProTool.Type -> ed.titleAt = frameAt(x)
                             else -> {
                                 // a tap on a clip's end (with a tool that trims it) picks that end
-                                val d = if (hit != null && hitRow != null) startDrag(p0, hit, hitRow, x) else null
+                                val d = if (hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
                                 if (d != null && (d.kind == DragKind.Trim || d.kind == DragKind.Ripple || d.kind == DragKind.Roll)) {
                                     haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                     ed.pickedEdge = d.picked()
@@ -1143,11 +1229,12 @@ private fun Tracks(
                             }
                         }
                         else -> {
-                            val d = if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x) else null
+                            val d = if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
                             if (d != null) {
                                 drag = d
                                 dragDx = 0f
                                 dragY = stackY
+                                dragY0 = stackY
                             }
                             while (true) {
                                 val ev = awaitPointerEvent()
@@ -1208,6 +1295,18 @@ private fun Tracks(
                     drawClip(c, row, xOf(c.start + moveShift), xOf(c.start + moveShift + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
                 }
                 if (ghost != null) drawClip(c, r, xOf(ghost.first), xOf(ghost.first + ghost.second), measurer, labelStyle, alpha = 0.9f, ghost = true)
+                if (dr != null && dr.kind == DragKind.Volume && c.id == dr.clip.id) {
+                    val dDb = -(dragY - dragY0) / dr.span * (LEVEL_HIGH - LEVEL_LOW)
+                    val k = dr.key
+                    val dt = TimelineMath.snap((dragDx / pps() * TPS).roundToLong(), p.rateNum, p.rateDen)
+                    val keys = when {
+                        k != null -> (c.volumeKeys - k + VolumeKey((k.time + dt).coerceIn(c.start, c.start + c.duration), k.db + dDb)).sortedBy { it.time }
+                        c.volumeKeys.isEmpty() -> emptyList()
+                        else -> (c.volumeKeys + VolumeKey(dr.at, levelAt(c, dr.at) + dDb)).sortedBy { it.time }
+                    }
+                    val level = if (c.volumeKeys.isEmpty()) c.levelDb + dDb else c.levelDb
+                    drawVolumeLine(c, keys, level, xOf(c.start), xOf(c.start + c.duration), r.top + 2.dp.toPx(), r.height - 4.dp.toPx(), Fc.AccentLight)
+                }
                 if (dr != null && dr.kind == DragKind.Slip && c.id == dr.clip.id) {
                     drawClip(c, r, xOf(c.start), xOf(c.start + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
                 }
@@ -1327,6 +1426,8 @@ private fun DrawScope.drawClip(
     drawLine(Color.Black.copy(alpha = alpha), Offset(x0, top), Offset(x0, top + h), 2.dp.toPx())
     drawLine(Color.Black.copy(alpha = alpha), Offset(x1, top), Offset(x1, top + h), 2.dp.toPx())
     if (c.selected || ghost) drawRoundRect(Color.White.copy(alpha = alpha), Offset(x0, top), Size(max(1f, x1 - x0), h), CornerRadius(3.dp.toPx()), style = Stroke(2.dp.toPx()))
+    // a sound's volume: a line across it (keyframes as dots); drag it with the Selection tool
+    if (c.kind == ClipKind.AUDIO && h > 16.dp.toPx()) drawVolumeLine(c, c.volumeKeys, c.levelDb, x0, x1, top, h, VolumeLineColor.copy(alpha = alpha * dim))
     // the clip's keyframes, along its foot
     if (c.keyframes.isNotEmpty() && c.duration > 0 && h > 20.dp.toPx()) {
         val y = top + h - 5.dp.toPx()

@@ -41,7 +41,7 @@ data class ProHelp(val title: String, val text: String, val shortcut: String = "
 object ProHelpText {
     private val all: Map<String, ProHelp> = mapOf(
         // the tools
-        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it; tap its edge to pick it and trim a frame at a time. Long-press a clip, a cut or an empty spot for more.", "V"),
+        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it; tap its edge to pick it and trim a frame at a time. On a selected sound, drag the yellow volume line up or down (or its dots, the keyframes); long-press a sound to add a keyframe or to duck music under dialogue. Long-press a clip, a cut or an empty spot for more.", "V"),
         "tool.TrackSelectForward" to ProHelp("Track Select Forward tool", "Tap to select every clip on that track from the tap onward; long-press to select from there on every track. Drag to move them all together.", "A"),
         "tool.RippleEdit" to ProHelp("Ripple Edit tool", "Drag a clip's edge to trim it; the clips after it move along so no gap opens. Tap an edge to pick it and trim a frame at a time.", "B"),
         "tool.RollingEdit" to ProHelp("Rolling Edit tool", "Drag a cut between two clips to move it: one clip gets longer as the other gets shorter, and nothing else moves. Tap a cut to pick it and roll it a frame at a time.", "N"),
