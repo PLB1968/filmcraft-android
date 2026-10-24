@@ -2,8 +2,8 @@
 <resources>
     <!-- the editor's dark surface, so nothing flashes before the first frame -->
     <color name="window_background">#FF000000</color>
-    <!-- twilight violet, the owl icon's field (docs/icon/owl.py) -->
-    <color name="ic_launcher_background">#FF4B3A8C</color>
+    <!-- night blue, the owl icon's field (docs/icon/owl.py) -->
+    <color name="ic_launcher_background">#FF1E2A4A</color>
 
     <style name="Theme.Rushcraft" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>

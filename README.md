@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/icon/rushcraft-icon-512.png" alt="Rushcraft's app icon: a round brown owl face with big yellow eyes on violet" width="128">
+  <img src="docs/icon/rushcraft-icon-512.png" alt="Rushcraft's app icon: a round blue owl with sleepy, half-open light-blue eyes and a yellow beak" width="128">
 </p>
 
 <h1 align="center">Rushcraft</h1>

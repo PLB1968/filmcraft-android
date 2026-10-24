@@ -39,6 +39,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.artcraftandroid.rushcraft.core.ExportQuality
+import io.github.artcraftandroid.rushcraft.ui.DialogButton
+import io.github.artcraftandroid.rushcraft.ui.ExportPreset
 import io.github.artcraftandroid.rushcraft.engine.toBitmap
 import io.github.artcraftandroid.rushcraft.ui.AppViewModel
 import io.github.artcraftandroid.rushcraft.ui.ExportPhase
@@ -119,6 +121,25 @@ fun ExportScreen(vm: AppViewModel) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 36.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 when (phase) {
                     ExportPhase.Settings -> {
+                        // one tap for the short-video apps
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
+                            for (p in ExportPreset.entries) {
+                                SelectChip(p.label, vm.exportPreset == p, {
+                                    vm.exportPreset = p
+                                    vm.exportSettings = p.settings
+                                }, tag = "export_preset_${p.name.lowercase()}")
+                            }
+                        }
+                        if (vm.exportPreset != null && t != null && t.width * 16u != t.height * 9u) {
+                            Text(
+                                "${vm.exportPreset?.label} videos are upright (9:16); this one is ${t.width}×${t.height}.",
+                                style = FcType.BodySmall,
+                                color = Fc.Detail,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { DialogButton("Make it 9:16", { ed.setAspect(9, 16) }, filled = false) }
+                        }
                         Row(
                             Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(12.dp)).background(Fc.Raised).clickable(role = Role.Button) { vm.exportSheet = true }.padding(horizontal = 16.dp).testTag("export_settings_row"),
                             verticalAlignment = Alignment.CenterVertically,
@@ -162,21 +183,21 @@ private fun SettingsSheet(vm: AppViewModel) {
             Spacer(Modifier.height(13.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for ((label, v) in listOf("720" to 720u, "1080" to 1080u, "4K" to 2160u)) {
-                    SelectChip(label, s.shortSide == v, { vm.exportSettings = s.copy(shortSide = v) }, tag = "export_resolution_$label")
+                    SelectChip(label, s.shortSide == v, { vm.exportSettings = s.copy(shortSide = v); vm.exportPreset = null }, tag = "export_resolution_$label")
                 }
             }
             Spacer(Modifier.height(39.dp))
             Text("Frame rate", style = FcType.Label, color = Fc.Body)
             Spacer(Modifier.height(13.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (f in listOf(24u, 25u, 30u, 50u, 60u)) SelectChip("$f", s.fps == f, { vm.exportSettings = s.copy(fps = f) }, tag = "export_fps_$f")
+                for (f in listOf(24u, 25u, 30u, 50u, 60u)) SelectChip("$f", s.fps == f, { vm.exportSettings = s.copy(fps = f); vm.exportPreset = null }, tag = "export_fps_$f")
             }
             Spacer(Modifier.height(39.dp))
             Text("Quality", style = FcType.Label, color = Fc.Body)
             Spacer(Modifier.height(13.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for ((label, q) in listOf("Low" to ExportQuality.LOW, "Medium" to ExportQuality.MEDIUM, "High" to ExportQuality.HIGH)) {
-                    SelectChip(label, s.quality == q, { vm.exportSettings = s.copy(quality = q) }, tag = "export_quality_$label")
+                    SelectChip(label, s.quality == q, { vm.exportSettings = s.copy(quality = q); vm.exportPreset = null }, tag = "export_quality_$label")
                 }
             }
             Spacer(Modifier.height(27.dp))

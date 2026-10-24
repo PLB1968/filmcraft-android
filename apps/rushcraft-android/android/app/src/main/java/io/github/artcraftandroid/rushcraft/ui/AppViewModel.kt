@@ -88,6 +88,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
 
     // export
     var exportSettings by mutableStateOf(ExportSettings(1080u, 30u, ExportQuality.HIGH))
+    /** The one-tap preset the settings came from (Shorts, Reels, TikTok), until they are changed. */
+    var exportPreset by mutableStateOf<ExportPreset?>(null)
     var exportPhase by mutableStateOf<ExportPhase>(ExportPhase.Settings)
         private set
     var exportSheet by mutableStateOf(false)
@@ -379,4 +381,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         exportPhase = ExportPhase.Settings
         screen = if (editor != null) Screen.Editor else Screen.Home
     }
+}
+
+/**
+ * One-tap export settings for the short-video apps: upright 9:16, 1080 × 1920 at 30 frames a
+ * second, high quality (each app recompresses what it gets, so more is wasted upload time).
+ */
+enum class ExportPreset(val label: String, val settings: ExportSettings) {
+    Shorts("Shorts", ExportSettings(1080u, 30u, ExportQuality.HIGH)),
+    Reels("Reels", ExportSettings(1080u, 30u, ExportQuality.HIGH)),
+    TikTok("TikTok", ExportSettings(1080u, 30u, ExportQuality.HIGH)),
 }
