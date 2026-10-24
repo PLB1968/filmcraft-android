@@ -768,7 +768,8 @@ fn new_text_sits_in_the_middle_of_the_frame_and_stays_centred_when_edited() {
     // left-aligned, the letters start at the box's left edge (a quarter of the way in)
     m.set_text_style(id, text::TextStyle { width: 0.5, align: text::TextAlign::Left, ..m.text_style(id).unwrap() }, false, false).unwrap();
     let l = m.placement(id).unwrap();
-    assert!((l.x - l.width / 2.0 - 270.0).abs() < 2.0, "{l:?}");
+    let left = l.corners.iter().step_by(2).copied().fold(f64::MAX, f64::min);
+    assert!((left - 270.0).abs() < 2.0, "{l:?}");
     // the text is drawn inside the frame
     let f = m.renderer().unwrap().frame(0, 270, false, None).unwrap();
     let lit = f.rgba.chunks(4).filter(|p| p[0] > 200 && p[1] > 200 && p[2] > 200).count();
@@ -1830,4 +1831,187 @@ fn a_crossfade_is_edited_like_any_effect_type_length_alignment_and_settings() {
     let c = m.transition_controls(ta).unwrap();
     assert!(!c.video && c.choices.iter().any(|x| x.id == "constant_power"));
     assert!(m.transition_controls(9_999_999).is_err());
+}
+
+/// A 16-bit stereo WAV of `channels` at `rate`.
+fn wav(dir: &Path, name: &str, channels: &[Vec<f32>], rate: u32) -> String {
+    let path = dir.join(name);
+    let n = channels[0].len() as u32;
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + n * 4).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 4).to_le_bytes());
+    b.extend_from_slice(&4u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&(n * 4).to_le_bytes());
+    for i in 0..n as usize {
+        for c in channels.iter().take(2) {
+            b.extend_from_slice(&((c[i].clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        }
+    }
+    std::fs::write(&path, b).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn the_more_menu_history_loudness_scenes_beats_and_colour() {
+    let (m, d, ids) = two_clips();
+    // the undo history, and jumping back and forth in it
+    m.razor(SEC / 2, Some(ids[0]), None).unwrap();
+    m.add_marker(SEC, String::new()).unwrap();
+    let h = m.undo_history();
+    assert_eq!(h.undo.last().map(String::as_str), Some("Add Marker"), "{:?}", h.undo);
+    m.undo_steps(2);
+    let h = m.undo_history();
+    assert_eq!(h.redo.first().map(String::as_str), Some("Razor"), "{:?}", h.redo);
+    m.redo_steps(2);
+    assert!(m.undo_history().redo.is_empty());
+    // loudness: untyped sounds become Dialogue and are matched, in one step
+    assert!(m.match_loudness(vec![]).unwrap() > 0);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Auto-Match Loudness"));
+    // scene detection runs as a job and ends cleanly
+    let job = m.detect_scenes(vec![ids[1]]).unwrap();
+    for _ in 0..2400 {
+        let st = m.export_status(job).unwrap();
+        if st.finished {
+            assert!(st.error.is_none(), "{:?}", st.error);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    m.poll();
+    // beat markers on steady music
+    let (music, beats) = filmcraft_audio_dsp::remix::test_music(48_000, 120.0, 8, 7);
+    let before: Vec<u64> = m.pro_timeline().unwrap().clips.iter().map(|c| c.id).collect();
+    m.add_media(vec![wav(&d, "music.wav", &music, 48_000)]).unwrap();
+    let song = m.pro_timeline().unwrap().clips.into_iter().find(|c| !before.contains(&c.id) && c.kind == ClipKind::Audio).expect("the music");
+    let markers = m.pro_timeline().unwrap().markers.len();
+    let n = m.beat_markers(song.id).unwrap();
+    assert!(n as usize >= beats.len() / 2, "{n} of {}", beats.len());
+    assert_eq!(m.pro_timeline().unwrap().markers.len(), markers + n as usize);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Beat Markers"));
+    // colour: a Lumetri Color goes on once, and an Input LUT
+    m.ensure_lumetri(ids[0]).unwrap();
+    m.ensure_lumetri(ids[0]).unwrap();
+    let fx = m.effect_controls(ids[0]).unwrap();
+    assert_eq!(fx.iter().filter(|e| e.id == "lumetri").count(), 1);
+    let lut = m.input_luts().into_iter().next().expect("a camera LUT");
+    m.set_input_lut(ids[0], lut.id.clone()).unwrap();
+    assert!(m.ensure_lumetri(song.id).is_err(), "colour is for pictures");
+}
+
+#[test]
+fn titles_animations_ken_burns_picture_in_picture_and_keyframing_by_dragging() {
+    let (m, _d, ids) = two_clips();
+    let opacity = |m: &MobileSession, id: u64| prm(fx(&m.effect_controls(id).unwrap(), "opacity"), "opacity").value[0];
+    // the templates, with the new end card, and a preview of one
+    let all = m.title_templates().unwrap();
+    for id in ["builtin:lower-third-slab", "builtin:title-centered", "builtin:end-credits-roll", "builtin:end-card-subscribe"] {
+        assert!(all.iter().any(|t| t.id == id), "{id} in {:?}", all.iter().map(|t| &t.id).collect::<Vec<_>>());
+    }
+    assert_eq!(all[0].category, "Lower Thirds");
+    assert!(m.title_thumbnail("builtin:end-card-subscribe".into(), 240).unwrap().starts_with(b"\x89PNG"));
+    // a title goes above the main track at the playhead, animated in, as one undo step
+    m.set_playhead(SEC);
+    let t = m.add_title_template("builtin:lower-third-slab".into()).unwrap();
+    let c = clip(&m, t);
+    assert_eq!(c.start, SEC);
+    assert!(m.timeline().unwrap().lanes.iter().any(|l| l.index >= 1 && l.clips.iter().any(|x| x.id == t)));
+    assert_eq!(m.timeline().unwrap().selected, Some(t));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Add Lower Third – Slab"));
+    let settled = m.placement(t).unwrap();
+    m.set_playhead(SEC + 5 * SEC / 2);
+    let mid = m.placement(t).unwrap();
+    m.set_playhead(SEC);
+    let first = m.placement(t).unwrap();
+    assert!(first.x < mid.x - 500.0, "slides in from the left: {first:?} {mid:?}");
+    assert!(settled.corners.len() == 8);
+    // its fields: a text edit by typing is one step
+    let f = m.title_fields(t).unwrap();
+    assert!(f.iter().any(|f| f.id == "name" && f.kind == titles::FieldKind::Text && f.value == "Alex Morgan"), "{f:?}");
+    m.set_title_field(t, "name".into(), "Pa".into(), true).unwrap();
+    m.set_title_field(t, "name".into(), "Pat".into(), true).unwrap();
+    assert!(m.title_fields(t).unwrap().iter().any(|f| f.id == "name" && f.value == "Pat"));
+    assert!(m.set_title_field(t, "slab_color".into(), "red".into(), false).is_err());
+    m.undo();
+    assert!(m.title_fields(t).unwrap().iter().any(|f| f.id == "name" && f.value == "Alex Morgan"), "typing undoes at once");
+    m.undo();
+    assert!(m.timeline().unwrap().lanes.iter().all(|l| l.clips.iter().all(|x| x.id != t)), "adding undoes at once");
+    assert!(m.title_fields(ids[0]).unwrap().is_empty());
+
+    // fade in and slide out a video clip; the middle keeps its look
+    let still = m.placement(ids[1]).unwrap();
+    m.animate_clip(ids[1], motion::Anim::Fade, motion::Anim::SlideDown, 0.5).unwrap();
+    m.set_playhead(2 * SEC);
+    assert!(opacity(&m, ids[1]) < 1.0);
+    m.set_playhead(3 * SEC);
+    assert!((opacity(&m, ids[1]) - 100.0).abs() < 1e-6);
+    assert_eq!((m.placement(ids[1]).unwrap().x, m.placement(ids[1]).unwrap().y), (still.x, still.y));
+    m.set_playhead(5 * SEC - 1);
+    assert!(m.placement(ids[1]).unwrap().y > 1920.0, "gone off the bottom");
+    // again with nothing: the animation is gone
+    m.animate_clip(ids[1], motion::Anim::None, motion::Anim::None, 0.5).unwrap();
+    assert_eq!(m.placement(ids[1]).unwrap().y, still.y);
+    m.set_playhead(2 * SEC);
+    assert!((opacity(&m, ids[1]) - 100.0).abs() < 1e-6);
+
+    // Ken Burns: bigger at the end, and always covering the frame
+    m.ken_burns(ids[0], motion::KenBurns::ZoomIn, 0.2).unwrap();
+    m.set_playhead(0);
+    let a = m.placement(ids[0]).unwrap();
+    m.set_playhead(2 * SEC - 1);
+    let b = m.placement(ids[0]).unwrap();
+    assert!(b.scale > a.scale * 1.15 && a.height * a.scale >= 1919.0, "{a:?} {b:?}");
+    m.ken_burns(ids[0], motion::KenBurns::PanLeft, 0.2).unwrap();
+    m.set_playhead(0);
+    let a = m.placement(ids[0]).unwrap();
+    m.set_playhead(2 * SEC - 1);
+    assert!(m.placement(ids[0]).unwrap().x > a.x + 100.0);
+
+    // picture-in-picture in the top right, a third of the frame wide
+    m.picture_in_picture(ids[1], motion::Corner::TopRight, 0.35).unwrap();
+    m.set_playhead(3 * SEC);
+    let p = m.placement(ids[1]).unwrap();
+    assert!((p.width * p.scale - 378.0).abs() < 1.0 && p.x > 540.0 && p.y < 960.0, "{p:?}");
+    assert!(!m.motion_path(ids[1]).unwrap().recording);
+
+    // keyframing by dragging: on, a drag at another time adds a keyframe and a path
+    m.set_motion_recording(ids[1], true).unwrap();
+    m.set_playhead(4 * SEC);
+    m.set_placement(ids[1], 300.0, 1500.0, p.scale, 0.0, false).unwrap();
+    let path = m.motion_path(ids[1]).unwrap();
+    assert!(path.recording && path.keys.len() == 4 && path.path.len() > 20, "{path:?}");
+    m.set_playhead(3 * SEC);
+    assert_eq!((m.placement(ids[1]).unwrap().x, m.placement(ids[1]).unwrap().y), (p.x, p.y));
+    m.set_motion_recording(ids[1], false).unwrap();
+    assert!(m.motion_path(ids[1]).unwrap().path.is_empty());
+}
+
+#[test]
+fn a_lumetri_color_that_changes_nothing_comes_off_and_keeps_playback_fast() {
+    let (m, _d, ids) = two_clips();
+    let has = |m: &MobileSession| m.effect_controls(ids[0]).unwrap().iter().any(|e| e.id == "lumetri");
+    let steps = m.undo_history().undo.len();
+    // opened and closed without a change: gone, with its undo step
+    m.ensure_lumetri(ids[0]).unwrap();
+    assert!(has(&m));
+    assert!(m.tidy_lumetri(ids[0]).unwrap());
+    assert!(!has(&m));
+    assert_eq!(m.undo_history().undo.len(), steps);
+    // changed: it stays
+    m.ensure_lumetri(ids[0]).unwrap();
+    let e = fx(&m.effect_controls(ids[0]).unwrap(), "lumetri").clone();
+    m.set_effect_param(ids[0], e.index, "exposure".into(), vec![1.0], false, true).unwrap();
+    assert!(!m.tidy_lumetri(ids[0]).unwrap());
+    assert!(has(&m));
+    // one left behind by an older version comes off when the project is opened
+    m.set_effect_param(ids[0], e.index, "exposure".into(), vec![0.0], false, true).unwrap();
+    assert_eq!(tools::drop_idle_lumetri(&mut m.lock()), 1);
+    assert!(!has(&m));
 }

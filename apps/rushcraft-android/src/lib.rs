@@ -28,6 +28,7 @@ pub mod edits;
 pub mod export;
 mod mediacodec;
 pub mod model;
+pub mod motion;
 pub mod placement;
 pub mod presets;
 pub mod pro;
@@ -37,6 +38,8 @@ pub mod renders;
 pub mod samples;
 pub mod speech;
 pub mod text;
+pub mod titles;
+pub mod tools;
 
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use model::TimelineInfo;
@@ -347,6 +350,7 @@ impl MobileSession {
                 s.execute("sequence.open", json!({ "item": id }))?;
             }
         }
+        tools::drop_idle_lumetri(&mut s);
         model::timeline(&s)
     }
 
@@ -926,6 +930,122 @@ impl MobileSession {
     /// Make a transition another type, keeping its place and length; returns the new one.
     pub fn change_transition(&self, transition: u64, effect: String) -> Result<u64, MobileError> {
         self.pro_edit(|s| pro::change_transition(s, transition, &effect))
+    }
+
+    // ---- the More menu ----
+
+    /// The undo history: steps to undo (oldest first) and to redo (next first).
+    pub fn undo_history(&self) -> tools::UndoHistory {
+        tools::history(&self.lock())
+    }
+
+    /// Undo `steps` steps at once (a pick in the history).
+    pub fn undo_steps(&self, steps: u32) {
+        for _ in 0..steps {
+            if self.undo().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Redo `steps` steps at once.
+    pub fn redo_steps(&self, steps: u32) {
+        for _ in 0..steps {
+            if self.redo().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Auto-Match Loudness on these clips' sound (every sound when empty); returns how many.
+    pub fn match_loudness(&self, clips: Vec<u64>) -> Result<u32, MobileError> {
+        self.pro_edit(|s| tools::match_loudness(s, &clips))
+    }
+
+    /// Scene Edit Detection on these video clips (every one when empty), in the background;
+    /// watch the job with [`MobileSession::export_status`]: the cuts go on when it ends.
+    pub fn detect_scenes(&self, clips: Vec<u64>) -> Result<u64, MobileError> {
+        tools::detect_scenes(&mut self.lock(), &clips)
+    }
+
+    /// Markers on the beats of a clip's sound (one undo step); returns how many. Slow: the
+    /// listening happens without holding the session.
+    pub fn beat_markers(&self, clip: u64) -> Result<u32, MobileError> {
+        let job = tools::beat_job(&self.lock(), clip)?;
+        let beats = tools::find_beats(&job)?;
+        tools::add_beat_markers(&mut self.lock(), &beats)
+    }
+
+    /// Give a video clip a Lumetri Color (for the Colour panel) when it has none.
+    pub fn ensure_lumetri(&self, clip: u64) -> Result<(), MobileError> {
+        self.pro_edit(|s| tools::ensure_lumetri(s, clip))
+    }
+
+    /// The Colour panel closed: an unchanged Lumetri Color it added comes off again.
+    pub fn tidy_lumetri(&self, clip: u64) -> Result<bool, MobileError> {
+        self.main_edit(|s| tools::tidy_lumetri(s, clip))
+    }
+
+    /// The Input LUTs offered: camera log to Rec. 709.
+    pub fn input_luts(&self) -> Vec<tools::Choice> {
+        tools::input_luts()
+    }
+
+    /// Set a video clip's Input LUT (empty: none).
+    pub fn set_input_lut(&self, clip: u64, lut: String) -> Result<(), MobileError> {
+        self.pro_edit(|s| tools::set_input_lut(s, clip, &lut))
+    }
+
+    // ---- titles and motion ----
+
+    /// The title templates (lower thirds, titles, end cards, credits, callouts).
+    pub fn title_templates(&self) -> Result<Vec<titles::TitleTemplate>, MobileError> {
+        titles::templates(&mut self.lock())
+    }
+
+    /// A title template drawn `width` pixels wide, as a PNG.
+    pub fn title_thumbnail(&self, id: String, width: u32) -> Result<Vec<u8>, MobileError> {
+        titles::thumbnail(&mut self.lock(), &id, width)
+    }
+
+    /// Place a title template at the playhead, animated in and out; returns the clip.
+    pub fn add_title_template(&self, id: String) -> Result<u64, MobileError> {
+        self.pro_edit(|s| titles::add(s, &id))
+    }
+
+    /// A placed title's editable fields (empty for other clips).
+    pub fn title_fields(&self, clip: u64) -> Result<Vec<titles::TitleField>, MobileError> {
+        titles::fields(&mut self.lock(), clip)
+    }
+
+    /// Change a placed title's field; `merge` folds typing or a drag into one undo step.
+    pub fn set_title_field(&self, clip: u64, field: String, value: String, merge: bool) -> Result<(), MobileError> {
+        self.pro_edit(|s| titles::set_field(s, clip, &field, &value, merge))
+    }
+
+    /// Give a clip an entrance and an exit, each `seconds` long.
+    pub fn animate_clip(&self, clip: u64, enter: motion::Anim, exit: motion::Anim, seconds: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::animate(s, clip, enter, exit, seconds))
+    }
+
+    /// Ken Burns: a slow zoom or pan over the whole clip; `amount` 0.05 to 0.5.
+    pub fn ken_burns(&self, clip: u64, kind: motion::KenBurns, amount: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::ken_burns(s, clip, kind, amount))
+    }
+
+    /// Picture-in-picture: the clip at `size` × the frame's width in a corner.
+    pub fn picture_in_picture(&self, clip: u64, corner: motion::Corner, size: f64) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::picture_in_picture(s, clip, corner, size))
+    }
+
+    /// Start or stop keyframing a clip's motion by dragging it on the Program monitor.
+    pub fn set_motion_recording(&self, clip: u64, on: bool) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::set_recording(s, clip, on))
+    }
+
+    /// A clip's animated path on the frame.
+    pub fn motion_path(&self, clip: u64) -> Result<motion::MotionPath, MobileError> {
+        motion::path(&self.lock(), clip)
     }
 
     // ---- render previews ----

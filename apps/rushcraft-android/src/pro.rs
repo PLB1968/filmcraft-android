@@ -655,7 +655,7 @@ pub(crate) fn bin(s: &Session) -> Vec<BinItem> {
                     mark_in: m.mark_in.map(|t| t.0),
                     mark_out: m.mark_out.map(|t| t.0),
                     uses: used(i.id),
-                    has_proxy: m.proxy.is_some(),
+                    has_proxy: crate::proxy::has_proxy(&s.project, i.id),
                 },
             ))
         })

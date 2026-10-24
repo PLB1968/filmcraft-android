@@ -8,6 +8,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.DropdownMenu
@@ -115,7 +117,11 @@ import kotlin.math.min
 @Composable
 fun ProEditor(ed: EditorController) {
     BackHandler {
-        if (ed.proSelection.isNotEmpty()) ed.proSelect(null) else ed.closeEditor()
+        when {
+            ed.panel != null -> ed.panel = null
+            ed.proSelection.isNotEmpty() -> ed.proSelect(null)
+            else -> ed.closeEditor()
+        }
     }
     // a hardware keyboard's shortcuts, as on the desktop
     val focus = remember { FocusRequester() }
@@ -135,6 +141,13 @@ fun ProEditor(ed: EditorController) {
         val desktop = maxWidth >= 600.dp || maxWidth > maxHeight
         SideEffect { ed.proDesktop = desktop }
         if (desktop) DesktopLayout(ed) else PortraitLayout(ed)
+        // the More menu's panels (Captions, Colour, Aspect Ratio…) rise from the bottom
+        ed.panel?.let { panel ->
+            Box(Modifier.fillMaxSize().background(Fc.SheetScrim).clickable(onClickLabel = "Close panel") { ed.panel = null }, contentAlignment = Alignment.BottomCenter) {
+                Box(Modifier.widthIn(max = 640.dp).fillMaxWidth().clickable(enabled = false) {}) { EditorPanel(ed, panel, Modifier.fillMaxWidth()) }
+            }
+        }
+        if (ed.showHistory) ed.history?.let { HistoryDialog(ed, it) }
         ed.titleAt?.let { at -> TitleDialog(ed, at) }
         ed.busy?.let { text ->
             Box(Modifier.fillMaxSize().background(Fc.Scrim).clickable(enabled = true, onClick = {}), contentAlignment = Alignment.Center) {
@@ -157,6 +170,7 @@ private fun ProTopBar(ed: EditorController) {
         Text(ed.project.name, style = FcType.Label, color = Fc.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
         HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = 24.dp) { ed.undo() }
         HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = 24.dp) { ed.redo() }
+        MoreMenu(ed)
         Box(
             Modifier
                 .padding(start = 4.dp, end = 8.dp)
@@ -171,6 +185,82 @@ private fun ProTopBar(ed: EditorController) {
             Text("Export", style = FcType.Button, color = Color.Black)
         }
     }
+}
+
+/** The More menu: the tools that don't need a button of their own. */
+@Composable
+private fun MoreMenu(ed: EditorController) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        HelpIconButton(ed, LucideIcons.EllipsisVertical.glyph(), "More", "more", "editor_more_button", iconSize = 24.dp) { open = true }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Fc.Panel) {
+            val has = ed.duration > 0L
+            val items: List<Triple<String, Boolean, () -> Unit>> = listOf(
+                Triple("Undo History…", ed.status?.canUndo == true || ed.status?.canRedo == true) { ed.openHistory() },
+                Triple("Aspect Ratio…", true) { ed.panel = Panel.AspectRatio },
+                Triple("Colour…", ed.proSelection.isNotEmpty()) { ed.openColor() },
+                Triple("Titles…", true) { ed.panel = Panel.Titles },
+                Triple("Motion…", ed.proSelection.isNotEmpty()) { ed.openMotion() },
+                Triple("Captions…", has) { ed.panel = Panel.Captions },
+                Triple("Voice-over…", true) { ed.panel = Panel.Voiceover },
+                Triple("Text to Speech…", true) { ed.panel = Panel.Speech(null) },
+                Triple("Auto-Match Loudness", has) { ed.matchLoudness() },
+                Triple("Scene Edit Detection", has) { ed.detectScenes() },
+                Triple("Beat Markers", ed.proSelection.isNotEmpty()) { ed.beatMarkers() },
+            )
+            for ((label, enabled, action) in items) {
+                DropdownMenuItem(
+                    text = { Text(label, style = FcType.Body, color = if (enabled) Fc.Body else Fc.Disabled) },
+                    enabled = enabled,
+                    onClick = {
+                        open = false
+                        action()
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** Edit ▸ History: every step to undo (the latest first) and to redo; tap one to go back to it. */
+@Composable
+private fun HistoryDialog(ed: EditorController, h: io.github.artcraftandroid.rushcraft.core.UndoHistory) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = { ed.showHistory = false }) {
+        Column(
+            Modifier.widthIn(max = 420.dp).fillMaxWidth().heightIn(max = 520.dp).clip(RoundedCornerShape(24.dp)).background(Fc.Panel).padding(vertical = 16.dp).testTag("pro_history"),
+        ) {
+            Text("Undo History", style = FcType.DialogTitle, color = Color.White, modifier = Modifier.padding(horizontal = 24.dp))
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(Modifier.weight(1f, fill = false)) {
+                // what can be redone, the furthest at the top, greyed
+                items(h.redo.size) { i ->
+                    val k = h.redo.size - 1 - i
+                    HistoryRow(h.redo[k], future = true) { ed.jumpHistory(undo = 0, redo = k + 1) }
+                }
+                // where you are, then what can be undone, the latest first
+                item { HistoryRow("Now", now = true) {} }
+                items(h.undo.size) { i ->
+                    val k = h.undo.size - 1 - i
+                    // tapping a step goes back to just before it
+                    HistoryRow(h.undo[k]) { ed.jumpHistory(undo = h.undo.size - k, redo = 0) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRow(label: String, future: Boolean = false, now: Boolean = false, onClick: () -> Unit) {
+    Text(
+        label,
+        style = FcType.Body,
+        color = when {
+            now -> Fc.AccentLight
+            future -> Fc.Detail
+            else -> Fc.Body
+        },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = !now, onClick = onClick).padding(horizontal = 24.dp, vertical = 14.dp),
+    )
 }
 
 @Composable

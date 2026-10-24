@@ -38,6 +38,14 @@ import io.github.artcraftandroid.rushcraft.core.TextStyle
 import io.github.artcraftandroid.rushcraft.core.TimelineInfo
 import io.github.artcraftandroid.rushcraft.core.TransitionInfo
 import io.github.artcraftandroid.rushcraft.core.TransitionControls
+import io.github.artcraftandroid.rushcraft.core.UndoHistory
+import io.github.artcraftandroid.rushcraft.core.Choice
+import io.github.artcraftandroid.rushcraft.core.Anim
+import io.github.artcraftandroid.rushcraft.core.Corner
+import io.github.artcraftandroid.rushcraft.core.KenBurns
+import io.github.artcraftandroid.rushcraft.core.MotionPath
+import io.github.artcraftandroid.rushcraft.core.TitleField
+import io.github.artcraftandroid.rushcraft.core.TitleTemplate
 import io.github.artcraftandroid.rushcraft.engine.AppPrefs
 import io.github.artcraftandroid.rushcraft.engine.Engine
 import io.github.artcraftandroid.rushcraft.engine.ProjectEntry
@@ -111,6 +119,12 @@ sealed interface Panel {
     data object Captions : Panel
     /** Text to speech: new speech ([clip] empty) or saying a speech clip again. */
     data class Speech(val clip: ULong?) : Panel
+    /** Pro mode's Colour panel (Lumetri) for the selected video clip. */
+    data object Color : Panel
+    /** Pro mode: the title templates, and the selected title's fields. */
+    data object Titles : Panel
+    /** Pro mode: the selected clip's entrance and exit, Ken Burns and picture-in-picture. */
+    data object Motion : Panel
 }
 
 /** The tool bar's submenus. */
@@ -1414,6 +1428,149 @@ class EditorController(
     fun setInterpolation(e: EffectInfo, p: ParamInfo, k: KeyframeInfo, interpolation: String) =
         edit { setKeyframeInterpolation(e.clip, e.index, p.id, k.mediaTime, interpolation) }
     fun resetParam(e: EffectInfo, p: ParamInfo) = edit { resetEffectParam(e.clip, e.index, p.id) }
+
+    // ---- Pro mode's More menu ----
+
+    /** The undo history is showing. */
+    var showHistory by mutableStateOf(false)
+    var history by mutableStateOf<UndoHistory?>(null)
+        private set
+
+    fun openHistory() {
+        scope.launch {
+            history = runCatching { engine.command { undoHistory() } }.getOrNull()
+            showHistory = history != null
+        }
+    }
+
+    /** Go back [undo] steps (or forward [redo]) in the history at once. */
+    fun jumpHistory(undo: Int, redo: Int) {
+        showHistory = false
+        edit {
+            if (undo > 0) undoSteps(undo.toUInt())
+            if (redo > 0) redoSteps(redo.toUInt())
+        }
+    }
+
+    /** The selected clips (else everything) for the More menu's tools. */
+    private fun picked(): List<ULong> = proSelection.map { it.id }
+
+    fun matchLoudness() {
+        stop()
+        scope.launch {
+            runCatching { engine.command { matchLoudness(picked()) } }
+                .onSuccess { host.tell(if (it == 1u) "1 sound matched." else "$it sounds matched.") }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
+    /** Cut the selected video clips (else all of them) at each change of shot. */
+    fun detectScenes() {
+        stop()
+        scope.launch {
+            val job = runCatching { engine.command { detectScenes(picked()) } }.onFailure { host.tell(it.userMessage) }.getOrNull() ?: return@launch
+            busy = "Finding scene changes…"
+            try {
+                while (true) {
+                    delay(500)
+                    val st = runCatching { engine.command { exportStatus(job) } }.getOrNull() ?: break
+                    busy = "Finding scene changes… ${(st.progress * 100).toInt()}%"
+                    if (st.finished) {
+                        st.error?.takeIf { it != "cancelled" }?.let { host.tell(it) }
+                        break
+                    }
+                }
+                // the cuts go on as the job's result is collected
+                refreshStatus()
+            } finally {
+                busy = null
+            }
+            refresh()
+        }
+    }
+
+    /** Markers on the beats of the selected sound. */
+    fun beatMarkers() {
+        val clip = proSelection.firstOrNull { it.kind == ClipKind.AUDIO }?.id ?: proSelection.firstOrNull()?.id
+            ?: return host.tell("Select the music first.")
+        stop()
+        scope.launch {
+            busy = "Listening for the beat…"
+            try {
+                runCatching { engine.command { beatMarkers(clip) } }
+                    .onSuccess { host.tell("$it beat markers added.") }
+                    .onFailure { host.tell(it.userMessage) }
+            } finally {
+                busy = null
+            }
+            refresh()
+        }
+    }
+
+    /** Open the Colour panel for the selected video clip (it gets a Lumetri Color). */
+    fun openColor() {
+        val video = pro?.videoTracks.orEmpty().map { it.id }.toSet()
+        val clip = proSelection.firstOrNull { it.track in video }?.id ?: return host.tell("Select a video clip first.")
+        scope.launch {
+            runCatching { engine.command { ensureLumetri(clip) } }.onFailure { return@launch host.tell(it.userMessage) }
+            refresh()
+            loadEffects(clip)
+            panel = Panel.Color
+        }
+    }
+
+    /** The Colour panel closed on [clip]: a Lumetri Color it added and nothing changed comes off. */
+    fun tidyLumetri(clip: ULong) {
+        scope.launch {
+            runCatching { engine.command { tidyLumetri(clip) } }.onSuccess { if (it) refresh() }
+        }
+    }
+
+    fun inputLuts(): List<Choice> = runCatching { session.inputLuts() }.getOrDefault(emptyList())
+
+    fun setInputLut(clip: ULong, lut: String) = edit { setInputLut(clip, lut) }
+
+    // ---- titles and motion ----
+
+    fun titleTemplates(): List<TitleTemplate> = runCatching { session.titleTemplates() }.getOrDefault(emptyList())
+
+    /** A title template's preview, drawn off the main thread. */
+    suspend fun titleThumbnail(id: String, width: Int): ImageBitmap? = withContext(Dispatchers.Default) {
+        runCatching { session.titleThumbnail(id, width.toUInt()) }.getOrNull()?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+    }
+
+    /** Place a title template at the playhead (animated in and out); it becomes the selection. */
+    fun addTitleTemplate(id: String) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { addTitleTemplate(id) } }.onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
+    suspend fun titleFields(clip: ULong): List<TitleField> = runCatching { engine.command { titleFields(clip) } }.getOrDefault(emptyList())
+
+    /** Change a placed title's field; [merge] folds typing or a drag into one undo step. */
+    fun setTitleField(clip: ULong, field: String, value: String, merge: Boolean) = quickEdit { setTitleField(clip, field, value, merge) }
+
+    fun animateClip(clip: ULong, enter: Anim, exit: Anim, seconds: Double) = edit { animateClip(clip, enter, exit, seconds) }
+
+    fun kenBurns(clip: ULong, kind: KenBurns, amount: Double) = edit { kenBurns(clip, kind, amount) }
+
+    fun pictureInPicture(clip: ULong, corner: Corner, size: Double) = edit { pictureInPicture(clip, corner, size) }
+
+    /** Keyframe the clip's motion by dragging it on the Program monitor (or stop). */
+    fun setMotionRecording(clip: ULong, on: Boolean) = edit { setMotionRecording(clip, on) }
+
+    suspend fun motionPath(clip: ULong): MotionPath? = runCatching { engine.command { motionPath(clip) } }.getOrNull()
+
+    /** Open the Motion panel for the selected clip with a picture. */
+    fun openMotion() {
+        val c = selectedClip
+        if (c == null || c.kind == ClipKind.AUDIO || c.kind == ClipKind.MISSING) return host.tell("Select a clip with a picture first.")
+        panel = Panel.Motion
+    }
 
     // ---- a transition in Effect Controls ----
 

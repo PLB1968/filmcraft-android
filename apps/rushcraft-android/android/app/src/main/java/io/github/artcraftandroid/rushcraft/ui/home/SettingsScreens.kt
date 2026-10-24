@@ -161,6 +161,7 @@ fun SettingsScreen(vm: AppViewModel) {
         )
         Spacer(Modifier.height(8.dp))
         Row48("About RushCraft") { vm.show(Screen.About) }
+        StorageSection()
         if (stored.isNotEmpty()) {
             Spacer(Modifier.height(24.dp))
             Text("Downloaded for captions and speech", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.padding(horizontal = 12.dp))
@@ -249,6 +250,57 @@ fun LicencesScreen(vm: AppViewModel) {
             Spacer(Modifier.height(8.dp))
             Text(text, style = FcType.BodySmall, color = Fc.Detail)
             Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** The projects' proxies (media/Proxies) and render previews (FilmCraft Previews) folders. */
+private fun storageDirs(projects: File, kind: String): List<File> =
+    projects.listFiles { f -> f.isDirectory }.orEmpty().map { if (kind == "proxies") File(it, "media/Proxies") else File(it, "FilmCraft Previews") }.filter { it.isDirectory }
+
+private fun bytesIn(dirs: List<File>): Long = dirs.sumOf { d -> d.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
+
+/**
+ * Storage: what proxies and render previews take, with a button to delete each. Both are made
+ * again when needed (proxies on their own when Settings › Proxies is on, renders after edits).
+ */
+@Composable
+private fun StorageSection() {
+    val ctx = LocalContext.current
+    val projects = remember { File(ctx.filesDir, "projects") }
+    var refresh by remember { mutableIntStateOf(0) }
+    var asking by remember { mutableStateOf<String?>(null) }
+    val sizes by produceState(0L to 0L, refresh) {
+        value = withContext(Dispatchers.IO) { bytesIn(storageDirs(projects, "proxies")) to bytesIn(storageDirs(projects, "renders")) }
+    }
+    Spacer(Modifier.height(24.dp))
+    Text("Storage", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.padding(horizontal = 12.dp))
+    Spacer(Modifier.height(8.dp))
+    for ((kind, label, bytes) in listOf(Triple("proxies", "Proxies", sizes.first), Triple("renders", "Rendered effects", sizes.second))) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp).testTag("settings_storage_$kind"), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(label, style = FcType.Body, color = Fc.Body)
+                Text(megabytes(bytes), style = FcType.BodySmall, color = Fc.Detail)
+            }
+            if (bytes > 0) DialogButton("Delete", { asking = kind }, filled = false)
+        }
+    }
+    asking?.let { kind ->
+        FcDialog(
+            if (kind == "proxies") "Delete all proxies?" else "Delete all rendered effects?",
+            "Delete",
+            onConfirm = {
+                asking = null
+                storageDirs(projects, kind).forEach { it.deleteRecursively() }
+                refresh++
+            },
+            onDismiss = { asking = null },
+        ) {
+            Text(
+                if (kind == "proxies") "Videos play from their originals until new proxies are made." else "Heavy effects play live until they are rendered again.",
+                style = FcType.Body,
+                color = Fc.Body,
+            )
         }
     }
 }

@@ -95,9 +95,9 @@ fn item_of(p: &Project, path: &str) -> Option<ItemId> {
     p.items.values().find(|i| matches!(&i.kind, ItemKind::Media(m) if matches!(&m.media, MediaRef::File { path: q } if q == path))).map(|i| i.id)
 }
 
-/// Whether item `id` has a proxy attached.
+/// Whether item `id` has a proxy attached whose file is there (deleted proxies are made again).
 pub(crate) fn has_proxy(p: &Project, id: ItemId) -> bool {
-    matches!(&p.item(id).map(|i| &i.kind), Some(ItemKind::Media(m)) if m.proxy.is_some())
+    matches!(&p.item(id).map(|i| &i.kind), Some(ItemKind::Media(m)) if matches!(&m.proxy, Some(MediaRef::File { path }) if std::path::Path::new(path).is_file()))
 }
 
 /// Set (or clear) the proxy of the item playing `media` in the project and in every undo and
