@@ -151,7 +151,13 @@ impl Renderer {
         let scale = scale_for(self.width.max(self.height), max_side);
         // a rendered preview (Render effects) plays instead of drawing the effects live; the
         // captions are drawn over it, as they aren't part of it
-        let preview = guarded(&cancel, || self.previews.frame(&self.media, &self.project, self.seq, self.rate.frame_at(t), scale));
+        // only over expensive effects (see `renders::heavy`): a rendered preview decodes in
+        // software at full size, slower than playing a clip live from its proxy with the phone's
+        // decoder
+        let f = self.rate.frame_at(t);
+        let heavy = filmcraft_render::preview::segment_at(&self.previews.segments(&self.project, self.seq), f)
+            .is_some_and(|g| crate::renders::heavy(&self.project, self.seq, g));
+        let preview = if heavy { guarded(&cancel, || self.previews.frame(&self.media, &self.project, self.seq, f, scale)) } else { None };
         if let Some(pf) = preview {
             // preview files decode at full size: shrink to the size asked for
             let long = pf.width.max(pf.height).max(1);
