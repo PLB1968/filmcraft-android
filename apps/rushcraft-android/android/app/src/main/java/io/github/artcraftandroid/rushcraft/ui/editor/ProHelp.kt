@@ -94,6 +94,7 @@ object ProHelpText {
         "sourceClose" to ProHelp("Close source", "Closes the clip in the Source monitor.", ""),
         "import" to ProHelp("Import", "Adds photos, videos or sounds to the Project panel without putting them on the timeline. Tap one to open it in the Source monitor.", ""),
         // the top bar
+        "more" to ProHelp("More", "Undo History, Aspect Ratio, Colour (the selected clip's Lumetri), Captions, Voice-over, Text to Speech, Auto-Match Loudness (the selected sounds, else all), Scene Edit Detection (cuts the selected video, else all, at each change of shot) and Beat Markers (on the selected music's beats).", ""),
         "home" to ProHelp("Home", "Saves and goes back to your projects.", ""),
         "undo" to ProHelp("Undo", "Takes back the last change.", "Ctrl+Z"),
         "redo" to ProHelp("Redo", "Puts back the last change you undid.", "Ctrl+Shift+Z"),

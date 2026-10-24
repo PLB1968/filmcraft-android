@@ -37,6 +37,7 @@ pub mod renders;
 pub mod samples;
 pub mod speech;
 pub mod text;
+pub mod tools;
 
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use model::TimelineInfo;
@@ -926,6 +927,65 @@ impl MobileSession {
     /// Make a transition another type, keeping its place and length; returns the new one.
     pub fn change_transition(&self, transition: u64, effect: String) -> Result<u64, MobileError> {
         self.pro_edit(|s| pro::change_transition(s, transition, &effect))
+    }
+
+    // ---- the More menu ----
+
+    /// The undo history: steps to undo (oldest first) and to redo (next first).
+    pub fn undo_history(&self) -> tools::UndoHistory {
+        tools::history(&self.lock())
+    }
+
+    /// Undo `steps` steps at once (a pick in the history).
+    pub fn undo_steps(&self, steps: u32) {
+        for _ in 0..steps {
+            if self.undo().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Redo `steps` steps at once.
+    pub fn redo_steps(&self, steps: u32) {
+        for _ in 0..steps {
+            if self.redo().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// Auto-Match Loudness on these clips' sound (every sound when empty); returns how many.
+    pub fn match_loudness(&self, clips: Vec<u64>) -> Result<u32, MobileError> {
+        self.pro_edit(|s| tools::match_loudness(s, &clips))
+    }
+
+    /// Scene Edit Detection on these video clips (every one when empty), in the background;
+    /// watch the job with [`MobileSession::export_status`]: the cuts go on when it ends.
+    pub fn detect_scenes(&self, clips: Vec<u64>) -> Result<u64, MobileError> {
+        tools::detect_scenes(&mut self.lock(), &clips)
+    }
+
+    /// Markers on the beats of a clip's sound (one undo step); returns how many. Slow: the
+    /// listening happens without holding the session.
+    pub fn beat_markers(&self, clip: u64) -> Result<u32, MobileError> {
+        let job = tools::beat_job(&self.lock(), clip)?;
+        let beats = tools::find_beats(&job)?;
+        tools::add_beat_markers(&mut self.lock(), &beats)
+    }
+
+    /// Give a video clip a Lumetri Color (for the Colour panel) when it has none.
+    pub fn ensure_lumetri(&self, clip: u64) -> Result<(), MobileError> {
+        self.pro_edit(|s| tools::ensure_lumetri(s, clip))
+    }
+
+    /// The Input LUTs offered: camera log to Rec. 709.
+    pub fn input_luts(&self) -> Vec<tools::Choice> {
+        tools::input_luts()
+    }
+
+    /// Set a video clip's Input LUT (empty: none).
+    pub fn set_input_lut(&self, clip: u64, lut: String) -> Result<(), MobileError> {
+        self.pro_edit(|s| tools::set_input_lut(s, clip, &lut))
     }
 
     // ---- render previews ----

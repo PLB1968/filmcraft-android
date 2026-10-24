@@ -2457,6 +2457,7 @@ name = "rushcraft-android"
 version = "0.7.2"
 dependencies = [
  "android_logger",
+ "filmcraft-audio-dsp",
  "filmcraft-codecs",
  "filmcraft-color",
  "filmcraft-edit",

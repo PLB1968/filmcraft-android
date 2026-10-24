@@ -1831,3 +1831,76 @@ fn a_crossfade_is_edited_like_any_effect_type_length_alignment_and_settings() {
     assert!(!c.video && c.choices.iter().any(|x| x.id == "constant_power"));
     assert!(m.transition_controls(9_999_999).is_err());
 }
+
+/// A 16-bit stereo WAV of `channels` at `rate`.
+fn wav(dir: &Path, name: &str, channels: &[Vec<f32>], rate: u32) -> String {
+    let path = dir.join(name);
+    let n = channels[0].len() as u32;
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + n * 4).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 4).to_le_bytes());
+    b.extend_from_slice(&4u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&(n * 4).to_le_bytes());
+    for i in 0..n as usize {
+        for c in channels.iter().take(2) {
+            b.extend_from_slice(&((c[i].clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        }
+    }
+    std::fs::write(&path, b).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn the_more_menu_history_loudness_scenes_beats_and_colour() {
+    let (m, d, ids) = two_clips();
+    // the undo history, and jumping back and forth in it
+    m.razor(SEC / 2, Some(ids[0]), None).unwrap();
+    m.add_marker(SEC, String::new()).unwrap();
+    let h = m.undo_history();
+    assert_eq!(h.undo.last().map(String::as_str), Some("Add Marker"), "{:?}", h.undo);
+    m.undo_steps(2);
+    let h = m.undo_history();
+    assert_eq!(h.redo.first().map(String::as_str), Some("Razor"), "{:?}", h.redo);
+    m.redo_steps(2);
+    assert!(m.undo_history().redo.is_empty());
+    // loudness: untyped sounds become Dialogue and are matched, in one step
+    assert!(m.match_loudness(vec![]).unwrap() > 0);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Auto-Match Loudness"));
+    // scene detection runs as a job and ends cleanly
+    let job = m.detect_scenes(vec![ids[1]]).unwrap();
+    for _ in 0..2400 {
+        let st = m.export_status(job).unwrap();
+        if st.finished {
+            assert!(st.error.is_none(), "{:?}", st.error);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    m.poll();
+    // beat markers on steady music
+    let (music, beats) = filmcraft_audio_dsp::remix::test_music(48_000, 120.0, 8, 7);
+    let before: Vec<u64> = m.pro_timeline().unwrap().clips.iter().map(|c| c.id).collect();
+    m.add_media(vec![wav(&d, "music.wav", &music, 48_000)]).unwrap();
+    let song = m.pro_timeline().unwrap().clips.into_iter().find(|c| !before.contains(&c.id) && c.kind == ClipKind::Audio).expect("the music");
+    let markers = m.pro_timeline().unwrap().markers.len();
+    let n = m.beat_markers(song.id).unwrap();
+    assert!(n as usize >= beats.len() / 2, "{n} of {}", beats.len());
+    assert_eq!(m.pro_timeline().unwrap().markers.len(), markers + n as usize);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Beat Markers"));
+    // colour: a Lumetri Color goes on once, and an Input LUT
+    m.ensure_lumetri(ids[0]).unwrap();
+    m.ensure_lumetri(ids[0]).unwrap();
+    let fx = m.effect_controls(ids[0]).unwrap();
+    assert_eq!(fx.iter().filter(|e| e.id == "lumetri").count(), 1);
+    let lut = m.input_luts().into_iter().next().expect("a camera LUT");
+    m.set_input_lut(ids[0], lut.id.clone()).unwrap();
+    assert!(m.ensure_lumetri(song.id).is_err(), "colour is for pictures");
+}
