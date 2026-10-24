@@ -145,6 +145,13 @@ fun SettingsScreen(vm: AppViewModel) {
             { vm.changeProModeDefault(it) },
             tag = "settings_pro_mode",
         )
+        SwitchRow(
+            "Proxies for smooth playback",
+            "Make small copies of HD and 4K videos in the background and play those while you edit. Exports always use the originals. Proxies take some storage.",
+            vm.autoProxies,
+            { vm.changeAutoProxies(it) },
+            tag = "settings_auto_proxies",
+        )
         Spacer(Modifier.height(8.dp))
         Row48("About FilmCraft") { vm.show(Screen.About) }
         if (stored.isNotEmpty()) {

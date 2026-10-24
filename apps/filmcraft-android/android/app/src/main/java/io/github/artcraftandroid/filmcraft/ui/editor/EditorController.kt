@@ -26,6 +26,7 @@ import io.github.artcraftandroid.filmcraft.core.LaneKind
 import io.github.artcraftandroid.filmcraft.core.MobileSession
 import io.github.artcraftandroid.filmcraft.core.ProClip
 import io.github.artcraftandroid.filmcraft.core.ProTimeline
+import io.github.artcraftandroid.filmcraft.core.ProxyStatus
 import io.github.artcraftandroid.filmcraft.core.TrackSwitches
 import io.github.artcraftandroid.filmcraft.core.Renderer
 import io.github.artcraftandroid.filmcraft.core.SessionStatus
@@ -35,6 +36,7 @@ import io.github.artcraftandroid.filmcraft.core.SpeechSettings
 import io.github.artcraftandroid.filmcraft.core.TextStyle
 import io.github.artcraftandroid.filmcraft.core.TimelineInfo
 import io.github.artcraftandroid.filmcraft.core.TransitionInfo
+import io.github.artcraftandroid.filmcraft.engine.AppPrefs
 import io.github.artcraftandroid.filmcraft.engine.Engine
 import io.github.artcraftandroid.filmcraft.engine.ProjectEntry
 import io.github.artcraftandroid.filmcraft.engine.Projects
@@ -130,6 +132,7 @@ class EditorController(
     private val scope: CoroutineScope,
     private val host: EditorHost,
     proDefault: Boolean = false,
+    private val prefs: AppPrefs? = null,
 ) {
     private val session: MobileSession get() = engine.session
 
@@ -249,10 +252,12 @@ class EditorController(
         playhead = t.playhead
         if (proMode) refreshPro()
         refreshStatus()
+        engine.command { setUseProxies(useProxies) }
         newRenderer()
         if (fresh) save()
         lastSaved = t.revision.toLong()
         requestFrame(playhead, draft = false)
+        watchProxies()
     }
 
     private suspend fun refreshStatus() {
@@ -279,6 +284,60 @@ class EditorController(
             scheduleSave()
         }
         requestFrame(playhead, draft = false)
+        watchProxies()
+    }
+
+    // ---- proxies ----
+
+    /** How the proxies are coming along (null until first asked). */
+    var proxies by mutableStateOf<ProxyStatus?>(null)
+        private set
+    /** Toggle Proxies: the monitors play proxies where there are some; kept for every project. */
+    var useProxies by mutableStateOf(prefs?.useProxies ?: true)
+        private set
+    private var proxyLoop: Job? = null
+    private var closed = false
+
+    /** Keep proxies coming: check on them every second while one is being made or waits. */
+    private fun watchProxies() {
+        if (closed || proxyLoop?.isActive == true) return
+        proxyLoop = scope.launch {
+            while (isActive && !closed) {
+                val st = runCatching { engine.command { proxyTick(prefs?.autoProxies ?: true) } }.getOrNull() ?: break
+                proxies = st
+                st.messages.forEach { host.tell(it) }
+                // a proxy was attached: a new renderer plays it
+                if (st.attached) refresh()
+                if (!st.busy) break
+                delay(1000)
+            }
+        }
+    }
+
+    fun toggleProxies() {
+        val on = !useProxies
+        useProxies = on
+        prefs?.useProxies = on
+        scope.launch {
+            engine.command { setUseProxies(on) }
+            refresh()
+        }
+    }
+
+    /** Make a proxy of this Project panel item (Create Proxy). */
+    fun createProxy(item: ULong) {
+        scope.launch {
+            runCatching { engine.command { createProxies(listOf(item)) } }.onFailure { host.tell(it.userMessage) }
+            watchProxies()
+        }
+    }
+
+    /** Take this item's proxy away and delete it (it plays from the original again). */
+    fun removeProxy(item: ULong) {
+        scope.launch {
+            engine.command { this.removeProxy(item) }
+            refresh()
+        }
     }
 
     private suspend fun refreshPro() {
@@ -326,6 +385,9 @@ class EditorController(
     /** Save and make the poster for Home (the first frame). */
     suspend fun close() {
         stop()
+        closed = true
+        proxyLoop?.cancel()
+        runCatching { engine.command { stopProxies() } }
         captionJob?.let { job -> runCatching { engine.command { cancelCaptions(job) } } }
         saveJob?.cancel()
         save()

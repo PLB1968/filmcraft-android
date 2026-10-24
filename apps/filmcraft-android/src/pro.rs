@@ -543,6 +543,8 @@ pub struct BinItem {
     pub mark_out: Option<i64>,
     /// How many clips on the open sequence play it.
     pub uses: u32,
+    /// A proxy is attached (the monitors play it while proxies are on).
+    pub has_proxy: bool,
 }
 
 /// The Project panel: every media item, in the order it was imported.
@@ -590,6 +592,7 @@ pub(crate) fn bin(s: &Session) -> Vec<BinItem> {
                     mark_in: m.mark_in.map(|t| t.0),
                     mark_out: m.mark_out.map(|t| t.0),
                     uses: used(i.id),
+                    has_proxy: m.proxy.is_some(),
                 },
             ))
         })

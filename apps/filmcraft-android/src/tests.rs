@@ -1598,3 +1598,64 @@ fn crossfades_left_without_a_cut_go_with_the_edit_that_left_them() {
     assert!(!m.pro_timeline().unwrap().transitions.is_empty());
     let _ = ids;
 }
+
+/// Tick the proxy queue until it has nothing left to do; whether a proxy was attached.
+fn make_proxies(m: &MobileSession, auto: bool) -> bool {
+    let mut attached = false;
+    for _ in 0..2400 {
+        let st = m.proxy_tick(auto);
+        attached |= st.attached;
+        assert!(st.messages.is_empty(), "{:?}", st.messages);
+        if !st.busy {
+            return attached;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("the proxy never finished");
+}
+
+#[test]
+fn proxies_are_made_one_at_a_time_and_attached_without_an_undo_step() {
+    let (m, d, _) = two_clips();
+    let videos: Vec<u64> = m.project_bin().iter().filter(|b| b.has_video).map(|b| b.id).collect();
+    assert_eq!(videos.len(), 2);
+    // small videos aren't proxied on their own; a still can't be
+    assert!(!make_proxies(&m, true));
+    assert!(m.create_proxies(vec![]).is_err());
+    m.add_media(vec![picture(&d)]).unwrap();
+    let still = m.project_bin().iter().find(|b| !b.has_video || b.duration == 0).map(|b| b.id).unwrap();
+    assert!(m.create_proxies(vec![still]).is_err());
+    let label = m.poll().undo_label;
+    m.create_proxies(videos.clone()).unwrap();
+    let st = m.proxy_tick(false);
+    assert!(st.busy && st.making == Some(videos[0]) && st.waiting == vec![videos[1]], "{st:?}");
+    assert!(make_proxies(&m, false));
+    let bin = m.project_bin();
+    assert!(videos.iter().all(|v| bin.iter().any(|b| b.id == *v && b.has_proxy)));
+    assert_eq!(m.poll().undo_label, label, "making a proxy is no undo step");
+    // undoing an edit made before the proxy keeps the proxy
+    m.undo();
+    assert!(m.project_bin().iter().filter(|b| videos.contains(&b.id)).all(|b| b.has_proxy));
+    m.redo();
+    // the monitors play the proxy; the picture is still the whole frame
+    m.set_use_proxies(true);
+    assert!(m.proxy_tick(false).enabled);
+    let f = m.renderer().unwrap().frame(SEC / 2, 360, true, None).unwrap();
+    assert!(f.width > 0 && f.height > 0);
+    // removed by hand: its file goes, and it isn't made again on its own
+    let file = {
+        let s = m.lock();
+        match &s.project.item(ItemId(videos[0])).unwrap().kind {
+            ItemKind::Media(c) => match &c.proxy {
+                Some(MediaRef::File { path }) => path.clone(),
+                _ => panic!("no proxy"),
+            },
+            _ => panic!("not media"),
+        }
+    };
+    assert!(Path::new(&file).is_file());
+    m.remove_proxy(videos[0]);
+    assert!(!Path::new(&file).exists());
+    assert!(!m.project_bin().iter().any(|b| b.id == videos[0] && b.has_proxy));
+    assert!(!make_proxies(&m, true));
+}

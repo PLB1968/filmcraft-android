@@ -72,6 +72,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         prefs.proModeDefault = on
     }
 
+    /** Settings › Proxies: make proxies of HD and 4K videos on their own. */
+    var autoProxies by mutableStateOf(prefs.autoProxies)
+        private set
+
+    fun changeAutoProxies(on: Boolean) {
+        autoProxies = on
+        prefs.autoProxies = on
+    }
+
     var screen by mutableStateOf(Screen.Home)
         private set
     var projectList by mutableStateOf<List<ProjectEntry>>(emptyList())
@@ -231,7 +240,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         opening = true
         try {
             val entry = withContext(Dispatchers.IO) { projects.touch(p) }
-            val ed = EditorController(e, entry, projects, viewModelScope, this, proDefault = proModeDefault)
+            val ed = EditorController(e, entry, projects, viewModelScope, this, proDefault = proModeDefault, prefs = prefs)
             ed.load(fresh)
             editor = ed
             screen = Screen.Editor

@@ -357,6 +357,7 @@ private fun ProTransport(ed: EditorController) {
         TextButton44(ed, "lift", "Lift", "pro_program_lift", inOut) { ed.liftExtract(extract = false) }
         TextButton44(ed, "extract", "Extract", "pro_program_extract", inOut) { ed.liftExtract(extract = true) }
         TextButton44(ed, "safeMargins", if (ed.safeMargins) "Safe Margins ✓" else "Safe Margins", "pro_program_safe_margins", true) { ed.safeMargins = !ed.safeMargins }
+        TextButton44(ed, "proxies", if (ed.useProxies) "Proxies ✓" else "Proxies", "pro_program_toggle_proxies", true) { ed.toggleProxies() }
         val res = when {
             ed.playbackScale >= 1f -> "Full"
             ed.playbackScale >= 0.5f -> "1/2"
@@ -589,7 +590,14 @@ private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
                             }
                             val length = if (b.duration > 0) " · " + TimelineMath.timecode(b.duration, ed.rateNum, ed.rateDen) else ""
                             val used = if (b.uses > 0u) " · used ${b.uses}×" else ""
-                            Text(kind + length + used, style = FcType.Badge, color = Fc.Detail, maxLines = 1)
+                            val px = ed.proxies
+                            val proxy = when {
+                                b.hasProxy -> " · Proxy"
+                                px != null && px.making == b.id -> " · Making proxy ${(px.progress * 100).toInt()}%"
+                                px != null && b.id in px.waiting -> " · Proxy next"
+                                else -> ""
+                            }
+                            Text(kind + length + used + proxy, style = FcType.Badge, color = Fc.Detail, maxLines = 1)
                         }
                     }
                     DropdownMenu(expanded = menuFor?.id == b.id, onDismissRequest = { menuFor = null }, containerColor = Fc.Panel) {
@@ -605,6 +613,21 @@ private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
                             menuFor = null
                             ed.openSourceAndEdit(b.id, overwrite = true)
                         })
+                        if (b.kind == BinKind.VIDEO) {
+                            val px = ed.proxies
+                            val queued = px != null && (px.making == b.id || b.id in px.waiting)
+                            if (b.hasProxy || queued) {
+                                DropdownMenuItem(text = { Text(if (b.hasProxy) "Remove Proxy" else "Stop Making Proxy", style = FcType.Body, color = Fc.Body) }, onClick = {
+                                    menuFor = null
+                                    ed.removeProxy(b.id)
+                                })
+                            } else {
+                                DropdownMenuItem(text = { Text("Create Proxy", style = FcType.Body, color = Fc.Body) }, onClick = {
+                                    menuFor = null
+                                    ed.createProxy(b.id)
+                                })
+                            }
+                        }
                     }
                 }
             }

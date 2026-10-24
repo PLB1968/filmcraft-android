@@ -30,6 +30,7 @@ pub mod model;
 pub mod placement;
 pub mod presets;
 pub mod pro;
+pub mod proxy;
 pub mod render;
 pub mod samples;
 pub mod speech;
@@ -39,6 +40,7 @@ use export::{ExportPlan, ExportSettings, ExportStatus};
 use model::TimelineInfo;
 use presets::PresetInfo;
 use pro::{BinItem, EffectInfo, ProTimeline, SourceInfo, TrackSwitches};
+use proxy::ProxyStatus;
 use render::Renderer;
 use speech::{CaptionLook, CaptionStatus, SpeechAudio, SpeechSettings};
 use text::{Placement, TextStyle};
@@ -195,6 +197,8 @@ pub struct MobileSession {
     /// Caption jobs by id.
     caption_jobs: Mutex<HashMap<u64, Arc<speech::CaptionJob>>>,
     next_job: AtomicU64,
+    /// The proxies being made, one at a time.
+    proxies: Mutex<proxy::ProxyQueue>,
 }
 
 impl MobileSession {
@@ -202,6 +206,11 @@ impl MobileSession {
     /// consistent between commands, and losing the user's project would be worse.
     fn lock(&self) -> MutexGuard<'_, Session> {
         self.session.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The proxy queue (taken after the session, never before).
+    fn proxy_queue(&self) -> MutexGuard<'_, proxy::ProxyQueue> {
+        self.proxies.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A Pro mode edit: a main-track edit (captions follow) that also takes away the crossfades
@@ -222,7 +231,12 @@ impl MobileSession {
 
 impl Default for MobileSession {
     fn default() -> Self {
-        Self { session: Mutex::new(Session::default()), caption_jobs: Mutex::new(HashMap::new()), next_job: AtomicU64::new(1) }
+        Self {
+            session: Mutex::new(Session::default()),
+            caption_jobs: Mutex::new(HashMap::new()),
+            next_job: AtomicU64::new(1),
+            proxies: Mutex::new(proxy::ProxyQueue::default()),
+        }
     }
 }
 
@@ -301,6 +315,7 @@ impl MobileSession {
     /// per second).
     pub fn new_project(&self, name: String, width: u32, height: u32, fps: u32) -> Result<TimelineInfo, MobileError> {
         let mut s = self.lock();
+        self.proxy_queue().clear(&s);
         s.execute("file.newProject", json!({ "name": name }))?;
         s.execute(
             "file.newSequence",
@@ -321,6 +336,7 @@ impl MobileSession {
     /// Open a saved project (`.fcproj`).
     pub fn open_project(&self, path: String) -> Result<TimelineInfo, MobileError> {
         let mut s = self.lock();
+        self.proxy_queue().clear(&s);
         s.execute("file.open", json!({ "path": path }))?;
         if s.state.active_sequence.is_none() {
             let first = s.project.items.values().find(|i| matches!(i.kind, filmcraft_project::ItemKind::Sequence(_))).map(|i| i.id.0);
@@ -789,6 +805,40 @@ impl MobileSession {
     /// The Project panel: the media imported into the project, in import order.
     pub fn project_bin(&self) -> Vec<BinItem> {
         pro::bin(&self.lock())
+    }
+
+    // ---- proxies ----
+
+    /// Move proxies along (call every second or so while [`ProxyStatus::busy`], and after
+    /// imports): attaches finished ones, starts the next, and with `auto` queues every HD or
+    /// bigger video that has none.
+    pub fn proxy_tick(&self, auto: bool) -> ProxyStatus {
+        let mut s = self.lock();
+        self.proxy_queue().tick(&mut s, auto)
+    }
+
+    /// Make proxies of these Project panel items (Create Proxies).
+    pub fn create_proxies(&self, items: Vec<u64>) -> Result<(), MobileError> {
+        let s = self.lock();
+        self.proxy_queue().add(&s, &items)
+    }
+
+    /// Take an item's proxy away and delete its file.
+    pub fn remove_proxy(&self, item: u64) {
+        let mut s = self.lock();
+        self.proxy_queue().remove(&mut s, item);
+    }
+
+    /// Stop making proxies (leaving the editor).
+    pub fn stop_proxies(&self) {
+        let s = self.lock();
+        self.proxy_queue().clear(&s);
+    }
+
+    /// Toggle Proxies: the monitors play the proxies (on) or the originals. Exports always use
+    /// the originals.
+    pub fn set_use_proxies(&self, on: bool) {
+        proxy::set_enabled(&mut self.lock(), on);
     }
 
     /// Open a Project panel item in the Source monitor.
