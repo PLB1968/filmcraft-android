@@ -1359,6 +1359,19 @@ private fun Tracks(
             val x = xOf(m.start)
             drawLine(markerColor(m.color).copy(alpha = 0.5f), Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
         }
+        // the render bar: rendered (green), may play live (yellow), needs rendering (red)
+        val barH = 3.dp.toPx()
+        for (span in ed.renderBar) {
+            val x0 = xOf(span.start)
+            val x1 = xOf(span.end)
+            if (x1 < 0f || x0 > w) continue
+            val color = when (span.state) {
+                "green" -> Color(0xFF3DDC84)
+                "red" -> Color(0xFFFF5252)
+                else -> Color(0xFFFFD54F)
+            }
+            drawRect(color, Offset(x0, 0f), Size(max(1f, x1 - x0), barH))
+        }
         // the playhead
         val px = xOf(ed.playhead)
         drawLine(Fc.AccentLight, Offset(px, 0f), Offset(px, size.height), 1.5.dp.toPx())

@@ -73,6 +73,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         prefs.autoProxies = on
     }
 
+    /** Settings › Render effects: render previews in the background after edits. */
+    var autoRender by mutableStateOf(prefs.autoRender)
+        private set
+
+    fun changeAutoRender(on: Boolean) {
+        autoRender = on
+        prefs.autoRender = on
+    }
+
     /** Settings › Hardware decoding: the phone's video decoders play footage (else the engine's). */
     var hardwareDecoding by mutableStateOf(prefs.hardwareDecoding)
         private set

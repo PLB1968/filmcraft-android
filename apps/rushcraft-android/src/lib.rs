@@ -33,6 +33,7 @@ pub mod presets;
 pub mod pro;
 pub mod proxy;
 pub mod render;
+pub mod renders;
 pub mod samples;
 pub mod speech;
 pub mod text;
@@ -889,6 +890,19 @@ impl MobileSession {
         // kept in the preferences too, which the engine applies whenever they change
         s.prefs.playback.hardware_decoding = if on { "auto" } else { "off" }.into();
         mediacodec::set_enabled(on);
+    }
+
+    // ---- render previews ----
+
+    /// The render bar: stretches to render (yellow, red) and rendered ones (green).
+    pub fn render_bar(&self) -> Vec<renders::RenderSpan> {
+        renders::render_bar(&self.lock())
+    }
+
+    /// Render the effects of every stretch not rendered yet (in the background); returns the job
+    /// to watch with [`MobileSession::export_status`], or nothing when all is rendered.
+    pub fn render_effects(&self) -> Result<Option<u64>, MobileError> {
+        renders::start(&mut self.lock())
     }
 
     /// Toggle Proxies: the monitors play the proxies (on) or the originals. Exports always use

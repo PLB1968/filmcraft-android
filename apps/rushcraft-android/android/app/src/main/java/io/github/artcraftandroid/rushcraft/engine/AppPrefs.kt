@@ -22,9 +22,15 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(HARDWARE_DECODING, true)
         set(v) = prefs.edit().putBoolean(HARDWARE_DECODING, v).apply()
 
+    /** Render effects in the background after edits (Settings › Render effects). */
+    var autoRender: Boolean
+        get() = prefs.getBoolean(AUTO_RENDER, true)
+        set(v) = prefs.edit().putBoolean(AUTO_RENDER, v).apply()
+
     private companion object {
         const val AUTO_PROXIES = "autoProxies"
         const val USE_PROXIES = "useProxies"
         const val HARDWARE_DECODING = "hardwareDecoding"
+        const val AUTO_RENDER = "autoRender"
     }
 }

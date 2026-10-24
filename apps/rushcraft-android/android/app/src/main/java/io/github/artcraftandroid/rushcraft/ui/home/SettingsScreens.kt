@@ -146,6 +146,13 @@ fun SettingsScreen(vm: AppViewModel) {
             tag = "settings_auto_proxies",
         )
         SwitchRow(
+            "Render effects in the background",
+            "A few seconds after an edit, the stretches whose effects, titles or transitions are too heavy to play smoothly are rendered once; playback shows the render. The bar above the timeline shows what's rendered (green) and what isn't (yellow, red).",
+            vm.autoRender,
+            { vm.changeAutoRender(it) },
+            tag = "settings_auto_render",
+        )
+        SwitchRow(
             "Hardware decoding",
             "Play H.264 and HEVC video with the phone's own video decoder: smooth 4K before its proxy is ready. Turn it off if a video shows wrong colours or glitches. A video picks the change up when it is opened again.",
             vm.hardwareDecoding,

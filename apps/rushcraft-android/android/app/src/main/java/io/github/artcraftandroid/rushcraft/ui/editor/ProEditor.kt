@@ -331,6 +331,10 @@ private fun ProTransport(ed: EditorController) {
         TextButton44(ed, "extract", "Extract", "pro_program_extract", inOut) { ed.liftExtract(extract = true) }
         TextButton44(ed, "safeMargins", if (ed.safeMargins) "Safe Margins ✓" else "Safe Margins", "pro_program_safe_margins", true) { ed.safeMargins = !ed.safeMargins }
         TextButton44(ed, "proxies", if (ed.useProxies) "Proxies ✓" else "Proxies", "pro_program_toggle_proxies", true) { ed.toggleProxies() }
+        val rendering = ed.renderProgress
+        TextButton44(ed, "render", if (rendering != null) "Rendering ${(rendering * 100).toInt()}%" else "Render", "pro_program_render", has) {
+            if (rendering != null) ed.stopRender() else ed.renderEffects()
+        }
         val res = when {
             ed.playbackScale >= 1f -> "Full"
             ed.playbackScale >= 0.5f -> "1/2"
@@ -702,6 +706,7 @@ private fun proShortcut(ed: EditorController, e: KeyEvent): Boolean {
         Key.K -> ed.shuttleStop()
         Key.L -> ed.shuttleForward()
         Key.Spacebar -> ed.togglePlay()
+        Key.Enter -> ed.renderEffects()
         Key.I -> ed.markIn()
         Key.O -> ed.markOut()
         Key.M -> ed.addMarker()
