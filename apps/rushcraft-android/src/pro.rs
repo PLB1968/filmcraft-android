@@ -125,6 +125,10 @@ pub struct ProTransition {
     pub start: i64,
     pub duration: i64,
     pub name: String,
+    /// The cut it sits on (its start or end for a fade from or to nothing).
+    pub cut: i64,
+    /// Where it sits on the cut: "center", "start" (it starts at the cut), "end" or "custom".
+    pub align: String,
 }
 
 /// The marker colours, in the desktop's order.
@@ -209,6 +213,7 @@ fn clips_of(s: &Session, seq: &Sequence) -> Vec<ProClip> {
 
 /// The open sequence as Pro mode shows it.
 pub(crate) fn timeline(s: &Session) -> Result<ProTimeline, MobileError> {
+    let frame = s.sequence_rate().frame_duration();
     let (_, seq) = model::sequence(s)?;
     let rate = s.sequence_rate();
     let tg = s.targeting();
@@ -242,7 +247,11 @@ pub(crate) fn timeline(s: &Session) -> Result<ProTimeline, MobileError> {
             .iter()
             .chain(&seq.audio_tracks)
             .flat_map(|t| {
-                t.transitions.iter().map(|tr| ProTransition {
+                t.transitions.iter().map(|tr| {
+                    let b = filmcraft_edit::transitions::bounds(t, tr);
+                    ProTransition {
+                    cut: b.map_or(tr.start.0, |(_, cut, _)| cut.0),
+                    align: b.map_or("custom", |(_, cut, _)| filmcraft_edit::transitions::alignment(tr, cut, frame).id()).to_string(),
                     id: tr.id.0,
                     track: t.id.0,
                     from: tr.from.map(|c| c.0),
@@ -250,7 +259,7 @@ pub(crate) fn timeline(s: &Session) -> Result<ProTimeline, MobileError> {
                     start: tr.start.0,
                     duration: tr.duration.0,
                     name: tr.effect.def().map(|d| d.name.to_string()).unwrap_or_default(),
-                })
+                }})
             })
             .collect(),
     })

@@ -1763,12 +1763,16 @@ fn the_volume_line_sets_levels_and_keyframes_and_music_ducks_under_other_sound()
 #[test]
 fn effects_render_to_previews_that_playback_then_shows() {
     let (m, _d, ids) = two_clips();
-    // a heavy-ish look on the first clip, a crossfade at the cut
+    // plain clips, a cheap look and a crossfade play live: nothing to render
     let e = effect_presets().into_iter().next().expect("an effect preset");
     m.set_effect(ids[0], e.id.clone(), 80.0, false, false).unwrap();
     m.crossfade(ids[0], true, false, 0.5).unwrap();
+    assert!(m.render_bar().iter().all(|r| r.state == "yellow"), "{:?}", m.render_bar());
+    assert!(m.render_effects().unwrap().is_none());
+    // an expensive effect needs rendering
+    edits::ex(&mut m.lock(), "effects.apply", serde_json::json!({"clips": [ids[1]], "effect": "gaussian_blur"})).unwrap();
     let bar = m.render_bar();
-    assert!(bar.iter().any(|r| r.state == "yellow" || r.state == "red"), "{bar:?}");
+    assert!(bar.iter().any(|r| r.state == "red"), "{bar:?}");
     let job = m.render_effects().unwrap().expect("something to render");
     for _ in 0..2400 {
         let st = m.export_status(job).unwrap();
@@ -1779,15 +1783,17 @@ fn effects_render_to_previews_that_playback_then_shows() {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
     let bar = m.render_bar();
-    assert!(bar.iter().any(|r| r.state == "green"), "{bar:?}");
+    assert!(bar.iter().any(|r| r.state == "green") && !bar.iter().any(|r| r.state == "red"), "{bar:?}");
     assert!(m.render_effects().unwrap().is_none(), "nothing left to render: {bar:?}");
     // the rendered stretch plays from its preview, at the size asked for
     let g = bar.iter().find(|r| r.state == "green").unwrap();
     let f = m.renderer().unwrap().frame((g.start + g.end) / 2, 360, true, None).unwrap();
     assert!(f.width.max(f.height) <= 360 && f.width > 0, "{}x{}", f.width, f.height);
     // an edit makes its stretch need rendering again
-    m.set_effect(ids[0], e.id.clone(), 20.0, false, false).unwrap();
-    assert!(m.render_bar().iter().any(|r| r.state != "green"));
+    let blur = fx(&m.effect_controls(ids[1]).unwrap(), "gaussian_blur").clone();
+    let p = blur.params.iter().find(|p| p.kind == pro::ParamType::Number).expect("a number").id.clone();
+    m.set_effect_param(ids[1], blur.index, p, vec![40.0], false, true).unwrap();
+    assert!(m.render_bar().iter().any(|r| r.state == "red"));
 }
 
 #[test]
@@ -2014,4 +2020,71 @@ fn a_lumetri_color_that_changes_nothing_comes_off_and_keeps_playback_fast() {
     m.set_effect_param(ids[0], e.index, "exposure".into(), vec![0.0], false, true).unwrap();
     assert_eq!(tools::drop_idle_lumetri(&mut m.lock()), 1);
     assert!(!has(&m));
+}
+
+/// A `frames`-frame 30 fps `w`×`h` H.264 movie (a phone proxy's shape), for timing playback.
+fn big_movie(dir: &Path, w: u32, h: u32, frames: i64) -> String {
+    let path = dir.join(format!("big{w}x{h}.mp4"));
+    let rate = FrameRate::FPS_30;
+    let dur = rate.tick_of(frames);
+    let scene = DemoScene::Aurora;
+    let src = GeneratorSource::new(Generator::Demo(scene), w, h, rate, dur);
+    let mut p = Project::new("fixture");
+    let clip = MediaClip {
+        media: MediaRef::Generator(Generator::Demo(scene)),
+        info: src.info().clone(),
+        interpret: Default::default(),
+        mark_in: None,
+        mark_out: None,
+        markers: vec![],
+        offline: false,
+        proxy: None,
+        identity: None,
+    };
+    let item = p.add_item("scene", Label::Iris, ItemKind::Media(clip), None);
+    let seq = p.new_sequence("s", SequenceSettings { width: w, height: h, frame_rate: rate, ..Default::default() }, 1, 0, None);
+    let v = p.make_track_item(item, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, dur), rate).unwrap();
+    p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
+    let settings = fx::ExportSettings { format: fx::Format::H264, path: path.to_string_lossy().into_owned(), bitrate_kbps: 8000, ..Default::default() };
+    let shared: filmcraft_media::SharedSource = std::sync::Arc::new(src);
+    let provider = move |id: ItemId| (id == item).then(|| shared.clone());
+    fx::export(&std::sync::Arc::new(p), seq, &settings, &provider, &Default::default()).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+#[ignore = "timing: cargo test -p rushcraft-android --release playback_timing -- --ignored --nocapture"]
+fn playback_timing() {
+    let d = tmp();
+    let clip = big_movie(&d, 1080, 1920, 60);
+    let m = MobileSession::new();
+    m.new_project("P".into(), 1080, 1920, 30).unwrap();
+    m.add_media(vec![clip]).unwrap();
+    let r = m.renderer().unwrap();
+    let frame = TICKS_PER_SECOND / 30;
+    for side in [960u32, 720, 480] {
+        let _ = r.frame(0, side, true, None).unwrap();
+        let start = std::time::Instant::now();
+        for i in 1..40 {
+            r.frame(i * frame, side, true, None).unwrap();
+        }
+        eprintln!("TIMING side {side}: {:.1} ms a frame", start.elapsed().as_secs_f64() * 1000.0 / 39.0);
+    }
+}
+
+#[test]
+fn the_timeline_knows_each_crossfades_cut_and_alignment_for_dragging() {
+    let (m, _d, ids) = two_clips();
+    m.crossfade(ids[0], true, false, 0.5).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let x = t.transitions.iter().find(|x| x.track == t.video_tracks[0].id).expect("a video crossfade").clone();
+    assert_eq!((x.cut, x.align.as_str()), (2 * SEC, "center"));
+    // dragged to after the cut
+    m.edit_transition(x.id, None, Some("start".into()), None, false, true).unwrap();
+    let y = m.pro_timeline().unwrap().transitions.into_iter().find(|y| y.id == x.id).unwrap();
+    assert_eq!((y.start, y.align.as_str()), (2 * SEC, "start"));
+    // and made longer
+    m.edit_transition(x.id, Some(x.duration * 2), None, None, false, true).unwrap();
+    let z = m.pro_timeline().unwrap().transitions.into_iter().find(|z| z.id == x.id).unwrap();
+    assert_eq!((z.start, z.duration, z.align.as_str()), (2 * SEC, x.duration * 2, "start"));
 }

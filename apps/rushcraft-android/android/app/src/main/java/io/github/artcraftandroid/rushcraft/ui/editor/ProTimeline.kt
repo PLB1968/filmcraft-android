@@ -1005,6 +1005,8 @@ private fun Tracks(
     var dragY by remember { mutableFloatStateOf(0f) }
     // where the drag began (y in the track stack): a volume drag's level follows the finger from it
     var dragY0 by remember { mutableFloatStateOf(0f) }
+    // a crossfade or fade being dragged: where it would go
+    var bandDrag by remember { mutableStateOf<BandDrag?>(null) }
     // the gesture reads these as they are now, not as they were when it began
     val pNow by rememberUpdatedState(p)
     val rowsNow by rememberUpdatedState(rows)
@@ -1237,6 +1239,42 @@ private fun Tracks(
                             }
                         }
                         else -> {
+                            // a crossfade or fade under the finger (Selection tool): its edges change its
+                            // length, its middle where it sits on the cut
+                            val band = if (!multi && ed.proTool == ProTool.Selection && hitRow != null && !hitRow.track.locked) {
+                                p0.transitions.firstOrNull { tr -> tr.track == hitRow.track.id && x >= xAt(tr.start) - 8.dp.toPx() && x <= xAt(tr.start + tr.duration) + 8.dp.toPx() }
+                            } else {
+                                null
+                            }
+                            if (band != null) {
+                                ed.selectTransition(band.id)
+                                val x0 = xAt(band.start)
+                                val x1 = xAt(band.start + band.duration)
+                                val edge = 14.dp.toPx()
+                                val mode = when {
+                                    x1 - x0 >= 3 * edge && x < x0 + edge -> -1
+                                    x1 - x0 >= 3 * edge && x > x1 - edge -> 1
+                                    x1 - x0 < 3 * edge && x < x0 -> -1
+                                    x1 - x0 < 3 * edge && x > x1 -> 1
+                                    else -> 0
+                                }
+                                val frame = TimelineMath.tickOfFrame(1, p0.rateNum, p0.rateDen)
+                                var dx = 0f
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    val c = ev.changes.firstOrNull { it.pressed } ?: break
+                                    dx += c.positionChange().x
+                                    ev.changes.forEach { it.consume() }
+                                    bandDrag = draggedBand(band, mode, (dx / ppsNow() * TPS).roundToLong(), frame)
+                                }
+                                val res = bandDrag
+                                bandDrag = null
+                                if (res != null && (res.duration != band.duration || res.align != band.align)) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    ed.editTransition(band.id, duration = res.duration.takeIf { it != band.duration }, align = res.align.takeIf { it != band.align })
+                                }
+                                return@awaitEachGesture
+                            }
                             val d = if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
                             if (d != null) {
                                 drag = d
@@ -1334,7 +1372,9 @@ private fun Tracks(
             }
             // crossfades and fades: a light band over the cut, with their ramps and a keyframe at each
             // end (a crossfade: the outgoing clip ramps down as the incoming one ramps up)
-            for (tr in p.transitions) {
+            for (tr0 in p.transitions) {
+                // the one being dragged is drawn where it would go
+                val tr = bandDrag?.takeIf { it.id == tr0.id }?.let { b -> tr0.copy(start = b.start, duration = b.duration) } ?: tr0
                 val r = rowOf[tr.track] ?: continue
                 val x0 = xOf(tr.start)
                 val x1 = xOf(tr.start + tr.duration)
@@ -1561,5 +1601,62 @@ private fun MarkerDialog(ed: EditorController, m: ProMarker, onClose: () -> Unit
             ed.deleteMarker(m.id)
             onClose()
         }, filled = false, destructive = true)
+    }
+}
+
+/** A crossfade or fade as a drag would leave it: its place, length and alignment on its cut. */
+data class BandDrag(val id: ULong, val start: Long, val duration: Long, val align: String)
+
+/**
+ * Transition [tr] dragged by [dt] ticks: by its left edge ([mode] -1) or right edge (1), changing
+ * its length (a centred one grows on both sides), or by its middle (0), moving it to start at,
+ * centre on or end at its cut. At least two frames long; whole frames.
+ */
+fun draggedBand(tr: ProTransition, mode: Int, dt: Long, frame: Long): BandDrag {
+    val f = frame.coerceAtLeast(1L)
+    val cut = tr.cut
+    val a0 = tr.start
+    val b0 = tr.start + tr.duration
+    val step = (dt / f) * f
+    return when (mode) {
+        0 -> {
+            // the middle: which side of the cut it lies on
+            val mid = (a0 + b0) / 2 + step - cut
+            val align = when {
+                mid > tr.duration / 4 -> "start"
+                mid < -tr.duration / 4 -> "end"
+                else -> "center"
+            }
+            val start = when (align) {
+                "start" -> cut
+                "end" -> cut - tr.duration
+                else -> cut - tr.duration / 2
+            }
+            BandDrag(tr.id, start, tr.duration, align)
+        }
+        else -> {
+            var a = a0
+            var b = b0
+            if (mode < 0) a += step else b += step
+            // a centred one stays centred: both edges move
+            if (tr.align == "center") {
+                if (mode < 0) b = cut + (cut - a) else a = cut - (b - cut)
+            }
+            if (b - a < 2 * f) {
+                if (mode < 0) a = b - 2 * f else b = a + 2 * f
+            }
+            val align = when {
+                abs(a - cut) < f -> "start"
+                abs(b - cut) < f -> "end"
+                else -> "center"
+            }
+            val d = b - a
+            val start = when (align) {
+                "start" -> cut
+                "end" -> cut - d
+                else -> cut - d / 2
+            }
+            BandDrag(tr.id, start, d, align)
+        }
     }
 }
