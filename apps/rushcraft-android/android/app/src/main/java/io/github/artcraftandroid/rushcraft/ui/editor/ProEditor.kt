@@ -677,6 +677,12 @@ private fun proShortcut(ed: EditorController, e: KeyEvent): Boolean {
                 if (shift) ed.redo() else ed.undo()
                 true
             }
+            // trim the picked edit point by a frame (five with Shift)
+            Key.DirectionLeft, Key.DirectionRight -> {
+                if (ed.pickedEdge == null) return false
+                ed.nudgeTrim((if (shift) 5 else 1) * (if (e.key == Key.DirectionLeft) -1 else 1))
+                true
+            }
             // Add Edit: cut at the playhead
             Key.K -> {
                 ed.cutAtPlayhead()
@@ -757,6 +763,16 @@ private fun TrimMonitor(ed: EditorController, v: TrimView, modifier: Modifier) {
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             textAlign = TextAlign.Center,
         )
+        // a picked edit point moves a frame at a time
+        if (ed.pickedEdge != null) {
+            FlowRow(Modifier.fillMaxWidth().background(Fc.Panel).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.Center) {
+                TextButton44(ed, "nudge", "−5", "pro_trim_back_5", true) { ed.nudgeTrim(-5) }
+                TextButton44(ed, "nudge", "−1 frame", "pro_trim_back_1", true) { ed.nudgeTrim(-1) }
+                TextButton44(ed, "nudge", "+1 frame", "pro_trim_forward_1", true) { ed.nudgeTrim(1) }
+                TextButton44(ed, "nudge", "+5", "pro_trim_forward_5", true) { ed.nudgeTrim(5) }
+                TextButton44(ed, "trimDone", "Done", "pro_trim_done", true) { ed.pickedEdge = null }
+            }
+        }
     }
 }
 

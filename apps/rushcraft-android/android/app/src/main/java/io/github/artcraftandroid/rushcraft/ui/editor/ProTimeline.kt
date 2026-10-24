@@ -737,6 +737,29 @@ private enum class DragKind { Move, Trim, Ripple, Roll, Stretch, Slip, Slide, Fo
 /** A drag on the tracks: what it does, to which clip (and edge), and the clips it takes along. */
 private data class ToolDrag(val kind: DragKind, val clip: ProClip, val head: Boolean, val partner: ProClip? = null, val group: List<ProClip> = emptyList())
 
+/** The picked edit point's bracket: yellow, apart from the white selection and the blue playhead. */
+private val PickedEdgeColor = Color(0xFFFFC83D)
+
+/** This drag's end as an edit point picked for one-frame trims. */
+private fun ToolDrag.picked() = PickedEdge(clip.id, head, ripple = kind == DragKind.Ripple, roll = kind == DragKind.Roll && partner != null)
+
+/** The Program monitor's frames for a picked edit point, with how to move it. */
+private fun pickedView(p: ProTimeline, e: PickedEdge, c: ProClip): TrimView? {
+    val (prev, next) = neighbours(p, c)
+    val kind = when {
+        e.roll -> DragKind.Roll
+        e.ripple -> DragKind.Ripple
+        else -> DragKind.Trim
+    }
+    val v = dragView(p, ToolDrag(kind, c, e.head, partner = if (e.head) prev else next), 0L) ?: return null
+    val how = when (kind) {
+        DragKind.Roll -> "Rolling Edit"
+        DragKind.Ripple -> "Ripple"
+        else -> "Trim"
+    }
+    return v.copy(caption = "$how ${if (e.head) "In" else "Out"}: move it a frame at a time")
+}
+
 /** The clips on [c]'s track that touch it: the one ending where it starts, the one starting where it ends. */
 private fun neighbours(p: ProTimeline, c: ProClip): Pair<ProClip?, ProClip?> {
     val frame = TimelineMath.tickOfFrame(1, p.rateNum, p.rateDen)
@@ -981,6 +1004,8 @@ private fun Tracks(
             if (to != null && (start != c.start || to.id != c.track)) ed.proMove(c.id, to.id, start)
             return
         }
+        // a trimmed end stays picked, for one-frame trims from the Program monitor
+        if (d.kind == DragKind.Trim || d.kind == DragKind.Ripple || d.kind == DragKind.Roll) ed.pickedEdge = d.picked()
         val delta = dragDelta(p, ed.playhead, d, dx, ppsNow(), snapReach)
         if (delta == 0L) return
         haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
@@ -1004,6 +1029,16 @@ private fun Tracks(
         }
     }
 
+    // the picked end's frames in the Program monitor (a drag shows its own)
+    val picked = ed.pickedEdge
+    if (drag == null) {
+        val pc = picked?.let { e -> p.clips.firstOrNull { it.id == e.clip } }
+        val trims = ed.proTool in listOf(ProTool.Selection, ProTool.RippleEdit, ProTool.RollingEdit)
+        SideEffect {
+            if (picked != null && (pc == null || !trims)) ed.pickedEdge = null
+            ed.showTrim(if (picked != null && pc != null && trims) pickedView(p, picked, pc) else null)
+        }
+    }
     Canvas(
         modifier
             .background(Fc.Black)
@@ -1095,7 +1130,16 @@ private fun Tracks(
                             ProTool.Razor -> if (hit != null && hitRow?.track?.locked != true) ed.proRazor(ed.playhead, hit.id, null)
                             ProTool.TrackSelectForward -> ed.proSelectForward(hitRow?.track?.id, tAt(x))
                             ProTool.Type -> ed.titleAt = frameAt(x)
-                            else -> ed.proSelect(hit?.id)
+                            else -> {
+                                // a tap on a clip's end (with a tool that trims it) picks that end
+                                val d = if (hit != null && hitRow != null) startDrag(p0, hit, hitRow, x) else null
+                                if (d != null && (d.kind == DragKind.Trim || d.kind == DragKind.Ripple || d.kind == DragKind.Roll)) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    ed.pickedEdge = d.picked()
+                                } else {
+                                    ed.proSelect(hit?.id)
+                                }
+                            }
                             }
                         }
                         else -> {
@@ -1167,6 +1211,19 @@ private fun Tracks(
                 if (dr != null && dr.kind == DragKind.Slip && c.id == dr.clip.id) {
                     drawClip(c, r, xOf(c.start), xOf(c.start + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
                 }
+            }
+            // the picked end: a bright bracket
+            picked?.let { e ->
+                val c = p.clips.firstOrNull { it.id == e.clip } ?: return@let
+                val r = rowOf[c.track] ?: return@let
+                val x = xOf(if (e.head) c.start else c.start + c.duration)
+                val lip = (if (e.head) 1f else -1f) * 6.dp.toPx()
+                val top = r.top + 1.dp.toPx()
+                val bottom = r.bottom - 1.dp.toPx()
+                val stroke = 3.dp.toPx()
+                drawLine(PickedEdgeColor, Offset(x, top), Offset(x, bottom), stroke)
+                drawLine(PickedEdgeColor, Offset(x, top), Offset(x + lip, top), stroke)
+                drawLine(PickedEdgeColor, Offset(x, bottom), Offset(x + lip, bottom), stroke)
             }
             // crossfades and fades: a light band with a diagonal, over the cut
             for (tr in p.transitions) {

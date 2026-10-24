@@ -44,6 +44,7 @@ import io.github.artcraftandroid.rushcraft.engine.Projects
 import io.github.artcraftandroid.rushcraft.engine.intoBitmap
 import io.github.artcraftandroid.rushcraft.engine.toBitmap
 import io.github.artcraftandroid.rushcraft.engine.userMessage
+import kotlin.math.abs
 import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +83,12 @@ data class TrimFrame(val item: ULong?, val time: Long, val label: String)
 
 /** The Program monitor during a trim: one frame, or two side by side (roll, slip, slide). */
 data class TrimView(val frames: List<TrimFrame>, val caption: String)
+
+/**
+ * An edit point picked for one-frame trims (a tapped clip end, or the end last dragged): the clip,
+ * which end, and how it trims (a plain trim, a ripple, or a roll with the clip it touches).
+ */
+data class PickedEdge(val clip: ULong, val head: Boolean, val ripple: Boolean = false, val roll: Boolean = false)
 
 /** A tool's panel. */
 sealed interface Panel {
@@ -497,6 +504,7 @@ class EditorController(
     fun togglePlay() = if (playing) stop() else play()
 
     fun play() {
+        pickedEdge = null
         val end = duration
         if (end <= 0) return
         if (playhead >= end - frameTicks) playhead = 0
@@ -892,6 +900,7 @@ class EditorController(
 
     /** Select a clip (with its linked partners while Linked Selection is on), nothing for none; [add] toggles it. */
     fun proSelect(clip: ULong?, add: Boolean = false) {
+        pickedEdge = null
         submenu = Submenu.None
         selectedCaption = null
         quickEdit { selectClips(listOfNotNull(clip), add && clip != null) }
@@ -970,6 +979,28 @@ class EditorController(
     }
 
     fun proTrim(clip: ULong, head: Boolean, delta: Long, ripple: Boolean) = edit { trimEdge(clip, head, delta, ripple) }
+
+    /** The edit point picked for one-frame trims ([nudgeTrim]); the Program monitor shows its frames. */
+    var pickedEdge by mutableStateOf<PickedEdge?>(null)
+
+    /** Move the picked edit point by [frames] (negative: earlier), the way it was picked to trim. */
+    fun nudgeTrim(frames: Int) {
+        val e = pickedEdge ?: return
+        val p = pro ?: return
+        val c = p.clips.firstOrNull { it.id == e.clip } ?: return run { pickedEdge = null }
+        val delta = frames * frameTicks
+        if (!e.roll) return proTrim(c.id, e.head, delta, e.ripple)
+        // a roll moves the cut between this clip and the one it touches
+        val near = frameTicks / 2
+        val other = p.clips.firstOrNull { o ->
+            o.track == c.track && o.id != c.id && if (e.head) abs(o.start + o.duration - c.start) <= near else abs(o.start - (c.start + c.duration)) <= near
+        }
+        when {
+            other == null -> proTrim(c.id, e.head, delta, ripple = false)
+            e.head -> proRoll(other.id, c.id, delta)
+            else -> proRoll(c.id, other.id, delta)
+        }
+    }
     fun proRoll(left: ULong, right: ULong, delta: Long) = edit { rollEdit(left, right, delta) }
     fun proSlip(clip: ULong, delta: Long) = edit { slipClip(clip, delta) }
     fun proSlide(clip: ULong, delta: Long) = edit { slideClip(clip, delta) }

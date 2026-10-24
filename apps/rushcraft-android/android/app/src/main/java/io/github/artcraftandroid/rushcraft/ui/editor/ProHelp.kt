@@ -41,10 +41,10 @@ data class ProHelp(val title: String, val text: String, val shortcut: String = "
 object ProHelpText {
     private val all: Map<String, ProHelp> = mapOf(
         // the tools
-        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it. Long-press a clip, a cut or an empty spot for more.", "V"),
+        "tool.Selection" to ProHelp("Selection tool", "Tap a clip to select it (its linked sound too, while Linked Selection is on). Drag a selected clip to move it, or drag its edge to trim it; tap its edge to pick it and trim a frame at a time. Long-press a clip, a cut or an empty spot for more.", "V"),
         "tool.TrackSelectForward" to ProHelp("Track Select Forward tool", "Tap to select every clip on that track from the tap onward; long-press to select from there on every track. Drag to move them all together.", "A"),
-        "tool.RippleEdit" to ProHelp("Ripple Edit tool", "Drag a clip's edge to trim it; the clips after it move along so no gap opens.", "B"),
-        "tool.RollingEdit" to ProHelp("Rolling Edit tool", "Drag a cut between two clips to move it: one clip gets longer as the other gets shorter, and nothing else moves.", "N"),
+        "tool.RippleEdit" to ProHelp("Ripple Edit tool", "Drag a clip's edge to trim it; the clips after it move along so no gap opens. Tap an edge to pick it and trim a frame at a time.", "B"),
+        "tool.RollingEdit" to ProHelp("Rolling Edit tool", "Drag a cut between two clips to move it: one clip gets longer as the other gets shorter, and nothing else moves. Tap a cut to pick it and roll it a frame at a time.", "N"),
         "tool.RateStretch" to ProHelp("Rate Stretch tool", "Drag a clip's edge to change its length by changing its speed: the same footage plays faster or slower.", "R"),
         "tool.Razor" to ProHelp("Razor tool", "Cuts happen at the playhead: tap a clip to cut it there (its linked sound too), or long-press to cut every track there. Double-tap this button to cut at the playhead with any tool: the selected clip, or every track when no selected clip is under the playhead. The clip before the cut is selected after.", "C, or Ctrl+K to cut at the playhead"),
         "tool.Slip" to ProHelp("Slip tool", "Drag a clip to change which part of its footage it shows. Its place and length on the timeline stay the same.", "Y"),
@@ -69,6 +69,8 @@ object ProHelpText {
         "solo" to ProHelp("Solo track", "Plays only the soloed audio tracks and silences the rest.", ""),
         "sync" to ProHelp("Sync lock", "When on, the track keeps in step with insert and ripple edits on other tracks, so its clips don't drift out of sync.", ""),
         // the monitors
+        "nudge" to ProHelp("Trim by frames", "Moves the picked edit point (the yellow bracket) earlier or later by one frame, or five. Pick one by tapping a clip's end with the Ripple or Rolling Edit tool, or a selected clip's end with the Selection tool; the end you last dragged stays picked too.", "Ctrl+← / Ctrl+→ (Shift: five frames)"),
+        "trimDone" to ProHelp("Done trimming", "Lets go of the picked edit point; the Program monitor shows the sequence again.", ""),
         "goToIn" to ProHelp("Go to In", "Moves the playhead to the In point.", ""),
         "goToOut" to ProHelp("Go to Out", "Moves the playhead to the Out point.", ""),
         "stepBack" to ProHelp("Step back one frame", "Moves the playhead back one frame.", "←"),
