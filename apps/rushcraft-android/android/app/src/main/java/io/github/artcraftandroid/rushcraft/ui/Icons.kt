@@ -20,7 +20,7 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/** The stroke weight Rushcraft draws Lucide's 24-unit icons with: lighter than Lucide's 2. */
+/** The stroke weight RushCraft draws Lucide's 24-unit icons with: lighter than Lucide's 2. */
 const val ICON_STROKE = 1.6f
 
 /** A Lucide icon from its SVG path strings (see `LucideIconsTask` in app/build.gradle.kts). */
@@ -39,7 +39,7 @@ internal fun lucide(name: String, vararg paths: String): ImageVector {
     return b.build()
 }
 
-/** An icon: a Lucide vector or one of Rushcraft's own drawn glyphs. */
+/** An icon: a Lucide vector or one of RushCraft's own drawn glyphs. */
 sealed interface Glyph {
     data class Vector(val image: ImageVector) : Glyph
     data class Drawn(val draw: DrawScope.(Color) -> Unit) : Glyph
@@ -55,7 +55,7 @@ fun GlyphIcon(glyph: Glyph, tint: Color, modifier: Modifier = Modifier, size: Dp
     }
 }
 
-/** Rushcraft's own glyphs, drawn on a 24-unit grid: shapes Lucide has no stroke-only form of. */
+/** RushCraft's own glyphs, drawn on a 24-unit grid: shapes Lucide has no stroke-only form of. */
 object Glyphs {
     private fun DrawScope.u(v: Float) = v * size.minDimension / 24f
 

@@ -175,7 +175,7 @@ class EditorController(
     /** A clip is being dragged or trimmed: tools wait. */
     var gesture by mutableStateOf(false)
 
-    /** Rushcraft always edits in Pro mode (the desktop-style editor). */
+    /** RushCraft always edits in Pro mode (the desktop-style editor). */
     var proMode by mutableStateOf(true)
         private set
     /** The timeline as Pro mode shows it (read only while Pro mode is on). */

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Files of Rushcraft's that another app may reach through its FileProvider: an exported video
+<!-- Files of RushCraft's that another app may reach through its FileProvider: an exported video
      being shared -->
 <paths>
     <cache-path name="share" path="share/" />

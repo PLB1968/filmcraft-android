@@ -228,7 +228,7 @@ fun ToolPanel(
 enum class SliderLook { Standard, Opacity }
 
 /**
- * Rushcraft's slider: a 4 dp track filled up to a 20 dp ringed thumb. A press anywhere moves the
+ * RushCraft's slider: a 4 dp track filled up to a 20 dp ringed thumb. A press anywhere moves the
  * thumb there; dragging follows the finger. [fraction] is 0..1; [onChange] gets the new fraction
  * while dragging, [onDone] when the finger lifts. [ticks] draws marks along the track.
  */

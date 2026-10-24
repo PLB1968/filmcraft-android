@@ -4,7 +4,7 @@ import android.content.Context
 
 /** The app's own settings (not a project's): kept in shared preferences. */
 class AppPrefs(context: Context) {
-    // still named for FilmCraft, whose settings Rushcraft keeps
+    // still named for FilmCraft, whose settings RushCraft keeps
     private val prefs = context.getSharedPreferences("filmcraft", Context.MODE_PRIVATE)
 
     /** Make proxies of HD and 4K videos in the background (Settings › Proxies). */

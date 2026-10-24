@@ -21,5 +21,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Rushcraft"
+rootProject.name = "RushCraft"
 include(":app")

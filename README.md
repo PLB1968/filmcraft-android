@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/icon/rushcraft-icon-512.png" alt="Rushcraft's app icon: a round blue owl with sleepy, half-open light-blue eyes and a yellow beak" width="128">
+  <img src="docs/icon/rushcraft-icon-512.png" alt="RushCraft's app icon: a round blue owl with sleepy, half-open light-blue eyes and a yellow beak" width="128">
 </p>
 
-<h1 align="center">Rushcraft</h1>
+<h1 align="center">RushCraft</h1>
 
 <p align="center">
-  <b>Rushcraft is a mobile video editor for Android in the spirit of Adobe's discontinued Premiere Rush: a desktop-style editor (Source and Program monitors, tracks, Premiere's tools) on your phone. It is a fork of <a href="https://github.com/artcraft-android/filmcraft-android">FilmCraft for Android</a>, built on the same Rust engine, <a href="https://github.com/storytold/filmcraft">FilmCraft</a>, with a Kotlin/Jetpack Compose UI.</b><br>
+  <b>RushCraft is a mobile video editor for Android in the spirit of Adobe's discontinued Premiere Rush: a desktop-style editor (Source and Program monitors, tracks, Premiere's tools) on your phone. It is a fork of <a href="https://github.com/artcraft-android/filmcraft-android">FilmCraft for Android</a>, built on the same Rust engine, <a href="https://github.com/storytold/filmcraft">FilmCraft</a>, with a Kotlin/Jetpack Compose UI.</b><br>
   Many credits to the original maintainers, <a href="https://github.com/storytold">storytold</a> and <a href="https://github.com/artcraft-android">artcraft-android</a>.
 </p>
 
@@ -126,7 +126,7 @@
 
 ## Planned features
 
-Rushcraft is in beta.
+RushCraft is in beta.
 
 | Area | Status |
 |---|---|
@@ -142,7 +142,7 @@ Rushcraft is in beta.
 | Export at 720p, 1080p or 4K, 24 to 60 fps, saved to Movies and shared | ✅ |
 | Upright and sideways layouts | ✅ |
 | Stock music, templates | ⬜ |
-| Generative AI, cloud storage, accounts | 🚫 Rushcraft is a local app |
+| Generative AI, cloud storage, accounts | 🚫 RushCraft is a local app |
 
 <sub>✅ works today · 🚧 in progress · ⬜ not started · 🚫 not planned</sub>
 
@@ -174,7 +174,7 @@ Build time dependencies:
 
 ## License
 
-[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. Rushcraft is not affiliated with Adobe;
+[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. RushCraft is not affiliated with Adobe;
 Premiere and Premiere Rush are trademarks of Adobe Inc.
 
 <br>

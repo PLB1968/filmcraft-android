@@ -153,7 +153,7 @@ fun SettingsScreen(vm: AppViewModel) {
             tag = "settings_hardware_decoding",
         )
         Spacer(Modifier.height(8.dp))
-        Row48("About Rushcraft") { vm.show(Screen.About) }
+        Row48("About RushCraft") { vm.show(Screen.About) }
         if (stored.isNotEmpty()) {
             Spacer(Modifier.height(24.dp))
             Text("Downloaded for captions and speech", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.padding(horizontal = 12.dp))
@@ -189,15 +189,15 @@ fun SettingsScreen(vm: AppViewModel) {
 @Composable
 fun AboutScreen(vm: AppViewModel) {
     val ctx = LocalContext.current
-    Page("About Rushcraft", { vm.back() }, "screen_about") {
+    Page("About RushCraft", { vm.back() }, "screen_about") {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Fc.Layer1).padding(16.dp)) {
-            Image(painterResource(R.drawable.ic_launcher_tile), contentDescription = "Rushcraft", modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)))
+            Image(painterResource(R.drawable.ic_launcher_tile), contentDescription = "RushCraft", modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)))
             Spacer(Modifier.height(12.dp))
-            Text("Rushcraft", style = FcType.Header, color = Fc.Title)
+            Text("RushCraft", style = FcType.Header, color = Fc.Title)
             Text("Version ${vm.appVersion} (engine ${engineVersion()})", style = FcType.BodySmall, color = Fc.Detail)
             Spacer(Modifier.height(12.dp))
             Text(
-                "A mobile video editor in the spirit of Premiere Rush, built on FilmCraft's Rust engine. MIT OR Apache-2.0. Rushcraft is not affiliated with Adobe; Premiere and Premiere Rush are trademarks of Adobe Inc.",
+                "A mobile video editor in the spirit of Premiere Rush, built on FilmCraft's Rust engine. MIT OR Apache-2.0. RushCraft is not affiliated with Adobe; Premiere and Premiere Rush are trademarks of Adobe Inc.",
                 style = FcType.BodySmall,
                 color = Fc.Body,
             )

@@ -15,7 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
-class RushcraftApplication : Application() {
+class RushCraftApplication : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** The engine, loaded once per process on a background thread and shared by the screens. */

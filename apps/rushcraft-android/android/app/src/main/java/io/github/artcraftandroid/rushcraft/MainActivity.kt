@@ -19,7 +19,7 @@ import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
 import io.github.artcraftandroid.rushcraft.ui.AppRoot
 import io.github.artcraftandroid.rushcraft.ui.AppViewModel
-import io.github.artcraftandroid.rushcraft.ui.RushcraftTheme
+import io.github.artcraftandroid.rushcraft.ui.RushCraftTheme
 import io.github.artcraftandroid.rushcraft.ui.NewProject
 import io.github.artcraftandroid.rushcraft.ui.PickRequest
 import io.github.artcraftandroid.rushcraft.ui.Screen
@@ -37,7 +37,7 @@ class MainActivity : ComponentActivity() {
     private val mic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         val run = micGranted
         micGranted = null
-        if (ok) run?.invoke() else vm.tell("Rushcraft needs the microphone to record a voice-over. You can allow it in Settings.")
+        if (ok) run?.invoke() else vm.tell("RushCraft needs the microphone to record a voice-over. You can allow it in Settings.")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge(SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
         window.isNavigationBarContrastEnforced = false
-        setContent { RushcraftTheme { AppRoot(vm) } }
+        setContent { RushCraftTheme { AppRoot(vm) } }
         lifecycleScope.launch { for (r in vm.pickRequests) launchPicker(r) }
         lifecycleScope.launch { for (r in vm.micRequests) askMicrophone(r) }
         lifecycleScope.launch {
@@ -74,7 +74,7 @@ class MainActivity : ComponentActivity() {
         } catch (_: ActivityNotFoundException) {
             vm.tell("No app on this phone can do that.")
         } catch (_: SecurityException) {
-            vm.tell("Rushcraft isn't allowed to do that.")
+            vm.tell("RushCraft isn't allowed to do that.")
         }
     }
 
@@ -106,7 +106,7 @@ class MainActivity : ComponentActivity() {
         mic.launch(Manifest.permission.RECORD_AUDIO)
     }
 
-    /** Videos and pictures other apps open with or share to Rushcraft: a new project from them. */
+    /** Videos and pictures other apps open with or share to RushCraft: a new project from them. */
     private fun handle(intent: Intent?) {
         val uris: List<Uri> = when (intent?.action) {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)

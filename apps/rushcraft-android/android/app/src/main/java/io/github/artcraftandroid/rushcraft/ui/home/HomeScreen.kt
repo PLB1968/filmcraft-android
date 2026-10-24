@@ -142,7 +142,7 @@ private fun HomeTopBar(vm: AppViewModel) {
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp).testTag("home_screen_top_bar"), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-            Image(painterResource(R.drawable.ic_launcher_tile), contentDescription = "Rushcraft", modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)))
+            Image(painterResource(R.drawable.ic_launcher_tile), contentDescription = "RushCraft", modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)))
         }
         Spacer(Modifier.weight(1f))
         Box {

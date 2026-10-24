@@ -123,7 +123,7 @@ abstract class UniffiBindgen : DefaultTask() {
  * its app icon, its UI font Inter (OFL) and the font's licence. [targets] maps each file name to
  * its path in the generated resource (or asset) folder.
  */
-abstract class RushcraftAssets : DefaultTask() {
+abstract class RushCraftAssets : DefaultTask() {
     @get:InputFiles @get:PathSensitive(PathSensitivity.NAME_ONLY) abstract val files: ConfigurableFileCollection
     @get:Input abstract val targets: MapProperty<String, String>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
@@ -214,7 +214,7 @@ android {
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        // kept from FilmCraft for Android, so Rushcraft installs over it and keeps its projects
+        // kept from FilmCraft for Android, so RushCraft installs over it and keeps its projects
         applicationId = "io.github.artcraftandroid.filmcraft"
         minSdk = minApi
         targetSdk = 36
@@ -283,7 +283,7 @@ androidComponents {
             library.set(cargoBuild.flatMap { it.outputDir.file("${rustAbis.first()}/librushcraft_android.so") })
         }
         val assetsDir = File(cargoWorkspaceDir, "assets")
-        val res = tasks.register<RushcraftAssets>("rushcraftResources$name") {
+        val res = tasks.register<RushCraftAssets>("rushcraftResources$name") {
             val map = mapOf(
                 "fonts/Inter-Regular.ttf" to "font/inter_regular.ttf",
                 "fonts/Inter-Medium.ttf" to "font/inter_medium.ttf",
@@ -292,7 +292,7 @@ androidComponents {
             files.from(map.keys.map { File(assetsDir, it) })
             targets.set(map.mapKeys { (k, _) -> k.substringAfterLast('/') })
         }
-        val licences = tasks.register<RushcraftAssets>("rushcraftLicences$name") {
+        val licences = tasks.register<RushCraftAssets>("rushcraftLicences$name") {
             files.from(File(assetsDir, "fonts/OFL-Inter.txt"), File(assetsDir, "icons/LICENSE-lucide.txt"))
             targets.set(mapOf("OFL-Inter.txt" to "licences/OFL-Inter.txt", "LICENSE-lucide.txt" to "licences/LICENSE-lucide.txt"))
         }
@@ -302,8 +302,8 @@ androidComponents {
         variant.sources.java?.addGeneratedSourceDirectory(icons, LucideIconsTask::outputDir)
         variant.sources.jniLibs?.addGeneratedSourceDirectory(cargoBuild, CargoNdkBuild::outputDir)
         variant.sources.java?.addGeneratedSourceDirectory(bindgen, UniffiBindgen::outputDir)
-        variant.sources.res?.addGeneratedSourceDirectory(res, RushcraftAssets::outputDir)
-        variant.sources.assets?.addGeneratedSourceDirectory(licences, RushcraftAssets::outputDir)
+        variant.sources.res?.addGeneratedSourceDirectory(res, RushCraftAssets::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(licences, RushCraftAssets::outputDir)
     }
 }
 

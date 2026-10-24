@@ -78,7 +78,7 @@ class ProxyMaker(private val context: Context) {
             override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
                 if (transformer !== t) return
                 transformer = null
-                android.util.Log.w("Rushcraft", "proxy of ${w.media} ($plan): ${exportException.message}")
+                android.util.Log.w("RushCraft", "proxy of ${w.media} ($plan): ${exportException.message}")
                 // this phone can't keep the HDR: convert it to standard colour instead
                 if (plan == Plan.KeepHdr) attempt(w, Plan.ToneMap, onDone) else onDone(false)
             }

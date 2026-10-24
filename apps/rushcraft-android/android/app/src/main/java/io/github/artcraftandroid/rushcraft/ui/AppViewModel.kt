@@ -12,7 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.artcraftandroid.rushcraft.RushcraftApplication
+import io.github.artcraftandroid.rushcraft.RushCraftApplication
 import io.github.artcraftandroid.rushcraft.core.ExportQuality
 import io.github.artcraftandroid.rushcraft.core.ExportSettings
 import io.github.artcraftandroid.rushcraft.core.frameSizeFor
@@ -115,7 +115,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
 
     init {
         viewModelScope.launch {
-            getApplication<RushcraftApplication>().engine.await()
+            getApplication<RushCraftApplication>().engine.await()
                 .onSuccess { engine = it }
                 .onFailure { engineProblem = it.userMessage }
             refreshProjects()
@@ -304,7 +304,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
             return
         }
         // the project's name, with only the characters a file name can't hold replaced
-        val name = ed.project.name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().take(100).ifBlank { "Rushcraft" }
+        val name = ed.project.name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().take(100).ifBlank { "RushCraft" }
         val out = File(dir, "$name.mp4")
         exportPhase = ExportPhase.Running(0f)
         exportJob = viewModelScope.launch {
@@ -367,7 +367,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         return uri
     }
 
-    /** Files another app opened or shared with Rushcraft: into the open project, else a new one. */
+    /** Files another app opened or shared with RushCraft: into the open project, else a new one. */
     fun openShared(uris: List<Uri>) {
         val ed = editor
         if (ed != null && screen == Screen.Editor) {
@@ -375,7 +375,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
             return
         }
         viewModelScope.launch {
-            val e = getApplication<RushcraftApplication>().engine.await().getOrNull() ?: return@launch tell(engineProblem ?: "The editor couldn't start.")
+            val e = getApplication<RushCraftApplication>().engine.await().getOrNull() ?: return@launch tell(engineProblem ?: "The editor couldn't start.")
             val (w, h) = withContext(Dispatchers.IO) { frameFor(uris.first()) }
             val p = withContext(Dispatchers.IO) { projects.create(projects.todaysName(), w, h) }
             open(e, p, fresh = true)

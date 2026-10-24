@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Rushcraft: the FilmCraft engine on phones as a native library with Kotlin bindings (UniFFI); the Android app is in android/"
+description = "RushCraft: the FilmCraft engine on phones as a native library with Kotlin bindings (UniFFI); the Android app is in android/"
 
 [lib]
 name = "rushcraft_android"

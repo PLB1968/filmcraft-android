@@ -1,4 +1,4 @@
-# Rushcraft's owl, an original design: a round blue owl with sleepy, half-open light-blue eyes
+# RushCraft's owl, an original design: a round blue owl with sleepy, half-open light-blue eyes
 # and a yellow beak. One set of shapes, written as Android vectors and drawn as PNGs:
 #   python3 docs/icon/owl.py apps/rushcraft-android/android/app/src/main/res docs/icon
 import sys
@@ -33,7 +33,7 @@ def shapes():
 
 def vector(with_bg):
     out = ['<?xml version="1.0" encoding="utf-8"?>',
-           "<!-- Rushcraft's owl (an original design): docs/icon/owl.py writes this file. -->",
+           "<!-- RushCraft's owl (an original design): docs/icon/owl.py writes this file. -->",
            '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
            '    android:width="108dp" android:height="108dp"',
            '    android:viewportWidth="108" android:viewportHeight="108">']

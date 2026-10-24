@@ -22,7 +22,7 @@ val Inter = FontFamily(
 )
 
 /**
- * Rushcraft's colours. The app is always dark: black screens, dark grey panels, a blue accent,
+ * RushCraft's colours. The app is always dark: black screens, dark grey panels, a blue accent,
  * the timeline's clips coloured by kind.
  */
 object Fc {
@@ -106,7 +106,7 @@ object Fc {
     val EaseInOut = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 }
 
-/** Rushcraft's text styles: Inter, no tracking, the sizes the screens use. */
+/** RushCraft's text styles: Inter, no tracking, the sizes the screens use. */
 object FcType {
     private fun s(size: Int, weight: FontWeight, line: Float = 1.3f) =
         TextStyle(fontFamily = Inter, fontSize = size.sp, lineHeight = (size * line).sp, fontWeight = weight, letterSpacing = 0.sp)
@@ -145,7 +145,7 @@ object FcSize {
 }
 
 @Composable
-fun RushcraftTheme(content: @Composable () -> Unit) {
+fun RushCraftTheme(content: @Composable () -> Unit) {
     val colors = darkColorScheme(
         primary = Fc.Accent,
         onPrimary = Color.White,
