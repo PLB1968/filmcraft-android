@@ -2072,3 +2072,19 @@ fn playback_timing() {
     }
 }
 
+#[test]
+fn the_timeline_knows_each_crossfades_cut_and_alignment_for_dragging() {
+    let (m, _d, ids) = two_clips();
+    m.crossfade(ids[0], true, false, 0.5).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let x = t.transitions.iter().find(|x| x.track == t.video_tracks[0].id).expect("a video crossfade").clone();
+    assert_eq!((x.cut, x.align.as_str()), (2 * SEC, "center"));
+    // dragged to after the cut
+    m.edit_transition(x.id, None, Some("start".into()), None, false, true).unwrap();
+    let y = m.pro_timeline().unwrap().transitions.into_iter().find(|y| y.id == x.id).unwrap();
+    assert_eq!((y.start, y.align.as_str()), (2 * SEC, "start"));
+    // and made longer
+    m.edit_transition(x.id, Some(x.duration * 2), None, None, false, true).unwrap();
+    let z = m.pro_timeline().unwrap().transitions.into_iter().find(|z| z.id == x.id).unwrap();
+    assert_eq!((z.start, z.duration, z.align.as_str()), (2 * SEC, x.duration * 2, "start"));
+}
