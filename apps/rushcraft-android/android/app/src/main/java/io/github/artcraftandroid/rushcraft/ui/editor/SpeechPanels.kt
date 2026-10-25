@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -567,7 +568,7 @@ private fun TranscriptParagraph(
         style = TextStyle(fontFamily = Inter, fontSize = 17.sp, lineHeight = 26.sp),
         onTextLayout = { layout = it },
         modifier = Modifier.fillMaxWidth().pointerInput(from, to, text) {
-            androidx.compose.foundation.gestures.detectTapGestures(
+            detectTapGestures(
                 onTap = { p -> wordAt(p)?.let(tap) },
                 onLongPress = { p -> wordAt(p)?.let(press) },
             )
