@@ -635,7 +635,7 @@ impl TrackItem {
     pub fn range(&self) -> TimeRange {
         TimeRange::new(self.start, self.duration)
     }
-    /// Media time displayed at timeline time `t` (ignores time remapping keyframes).
+    /// Media time displayed at timeline time `t` (Time Remapping's keyed speed included).
     pub fn source_time_at(&self, t: Tick) -> Tick {
         if let Some(h) = self.frame_hold {
             return h;
@@ -654,16 +654,57 @@ impl TrackItem {
     /// Media time at timeline time `t` ignoring any frame hold.
     pub fn moving_source_time_at(&self, t: Tick) -> Tick {
         let rel = t - self.start;
-        let scaled = Tick((rel.0 as f64 * self.speed.abs()).round() as i64);
+        let scaled = self.consumed(rel);
         if self.reverse {
-            self.source_in + Tick((self.duration.0 as f64 * self.speed.abs()).round() as i64) - scaled - Tick(1)
+            self.source_in + self.consumed(self.duration) - scaled - Tick(1)
         } else {
             self.source_in + scaled
         }
     }
     /// Media time consumed by the item (the source out point).
     pub fn source_out(&self) -> Tick {
-        self.source_in + Tick((self.duration.0 as f64 * self.speed.abs()).round() as i64)
+        self.source_in + self.consumed(self.duration)
+    }
+    /// Media time the first `rel` of the item plays: `rel` × its speed, or, with Time Remapping
+    /// keyed (a speed ramp), the keyed speed integrated over `rel`.
+    fn consumed(&self, rel: Tick) -> Tick {
+        let base = self.speed.abs();
+        match self.remapped(rel, base) {
+            Some(m) => Tick(m.round() as i64),
+            None => Tick((rel.0 as f64 * base).round() as i64),
+        }
+    }
+    /// Time Remapping's keyed speed (percent) integrated over the item's first `rel` of timeline
+    /// time, times `base`; None when Time Remapping isn't keyed. Its keyframes sit at the media
+    /// times the item would show without the ramp (`source_in + clip time × base`), like any
+    /// effect's keyframes on a clip at that speed.
+    fn remapped(&self, rel: Tick, base: f64) -> Option<f64> {
+        let e = self.effect("time_remap").filter(|e| e.enabled)?;
+        let p = e.param("speed").filter(|p| p.is_animated())?;
+        let base = base.max(1e-6);
+        let rel = rel.0.max(0) as f64;
+        let s0 = self.source_in.0 as f64;
+        let speed = |tau: f64| (p.f64_at(Tick((s0 + tau * base).round() as i64)) / 100.0).clamp(0.01, 20.0);
+        // segment boundaries: the keyframes, in clip time
+        let mut cuts: Vec<f64> = p.keyframes.iter().map(|k| (k.time.0 as f64 - s0) / base).filter(|&c| c > 0.0 && c < rel).collect();
+        cuts.push(rel);
+        let mut sum = 0.0;
+        let mut a = 0.0;
+        for b in cuts {
+            if b <= a {
+                continue;
+            }
+            // Simpson's rule: exact for linear ramps, close for eased ones
+            const N: usize = 8;
+            let h = (b - a) / N as f64;
+            let mut acc = speed(a) + speed(b);
+            for i in 1..N {
+                acc += speed(a + h * i as f64) * if i % 2 == 1 { 4.0 } else { 2.0 };
+            }
+            sum += acc * h / 3.0;
+            a = b;
+        }
+        Some(sum * base)
     }
     pub fn effect(&self, id: &str) -> Option<&EffectInstance> {
         self.effects.iter().find(|e| e.effect == id)

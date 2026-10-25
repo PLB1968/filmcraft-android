@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- voice-overs -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- the in-app camera (record straight into the timeline); phones without one still install -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- files other apps open with RushCraft by path (pickers need no permission) -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />

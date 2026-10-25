@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
@@ -51,6 +52,11 @@ import io.github.artcraftandroid.rushcraft.core.ClipInfo
 import io.github.artcraftandroid.rushcraft.core.Corner
 import io.github.artcraftandroid.rushcraft.core.FieldKind
 import io.github.artcraftandroid.rushcraft.core.KenBurns
+import io.github.artcraftandroid.rushcraft.core.ClipKind
+import io.github.artcraftandroid.rushcraft.core.Ramp
+import io.github.artcraftandroid.rushcraft.core.MaskInfo
+import io.github.artcraftandroid.rushcraft.core.MaskPurpose
+import io.github.artcraftandroid.rushcraft.core.MaskShape
 import io.github.artcraftandroid.rushcraft.core.TitleField
 import io.github.artcraftandroid.rushcraft.core.TitleTemplate
 import io.github.artcraftandroid.rushcraft.ui.Fc
@@ -121,7 +127,7 @@ private fun TemplateTile(ed: EditorController, t: TitleTemplate, modifier: Modif
 
 /** One field of the selected title. */
 @Composable
-private fun TitleFieldRow(ed: EditorController, clip: ULong, f: TitleField) {
+internal fun TitleFieldRow(ed: EditorController, clip: ULong, f: TitleField) {
     val pad = Modifier.padding(horizontal = FcSize.PanelPadding)
     when (f.kind) {
         FieldKind.TEXT -> {
@@ -200,6 +206,7 @@ private val ANIMS = listOf(
     Anim.SLIDE_UP to "Slide ↑", Anim.SLIDE_DOWN to "Slide ↓", Anim.POP to "Pop", Anim.ZOOM to "Zoom", Anim.SPIN to "Spin",
 )
 private val KEN_BURNS = listOf(KenBurns.NONE to "None", KenBurns.ZOOM_IN to "Zoom in", KenBurns.ZOOM_OUT to "Zoom out", KenBurns.PAN_LEFT to "Pan left", KenBurns.PAN_RIGHT to "Pan right")
+private val RAMPS = listOf(Ramp.NONE to "None", Ramp.SLOW_MO_HIT to "Slow-mo hit", Ramp.SPEED_UP_THEN_SLOW to "Speed up, then slow", Ramp.RAMP_IN to "Ramp in", Ramp.RAMP_OUT to "Ramp out")
 private val CORNERS = listOf(Corner.TOP_LEFT to "Top left", Corner.TOP_RIGHT to "Top right", Corner.BOTTOM_LEFT to "Bottom left", Corner.BOTTOM_RIGHT to "Bottom right", Corner.CENTER to "Centre")
 
 /**
@@ -208,6 +215,12 @@ private val CORNERS = listOf(Corner.TOP_LEFT to "Top left", Corner.TOP_RIGHT to 
  */
 @Composable
 fun MotionPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: Modifier = Modifier) {
+    ToolPanel("Motion", close, modifier, tag = "motion_panel") { MotionBody(ed, c) }
+}
+
+/** The Motion panel's controls: entrance and exit, Ken Burns, picture-in-picture, keyframing. */
+@Composable
+fun MotionBody(ed: EditorController, c: ClipInfo, titles: Boolean = false) {
     var enter by remember(c.id) { mutableStateOf(Anim.NONE) }
     var exit by remember(c.id) { mutableStateOf(Anim.NONE) }
     var seconds by remember { mutableDoubleStateOf(0.5) }
@@ -216,8 +229,9 @@ fun MotionPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: 
     var corner by remember(c.id) { mutableStateOf<Corner?>(null) }
     var size by remember { mutableDoubleStateOf(0.35) }
     var recording by remember(c.id) { mutableStateOf(false) }
+    var ramp by remember(c.id) { mutableStateOf<Ramp?>(null) }
     LaunchedEffect(c.id, ed.timeline?.revision) { recording = ed.motionPath(c.id)?.recording == true }
-    ToolPanel("Motion", close, modifier, tag = "motion_panel") {
+    Column(Modifier.fillMaxWidth()) {
         val pad = Modifier.padding(horizontal = FcSize.PanelPadding)
         val animate = { ed.animateClip(c.id, enter, exit, seconds) }
         Text("Animate in", style = FcType.Label, color = Fc.Secondary, modifier = pad)
@@ -228,6 +242,17 @@ fun MotionPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: 
         Spacer(Modifier.height(8.dp))
         ChipRow(ANIMS, exit, "motion_out") { exit = it; animate() }
         ValueSlider("Length", "%.1f s".format(seconds), ((seconds - 0.2) / 1.8).toFloat(), { seconds = 0.2 + it * 1.8 }, { if (enter != Anim.NONE || exit != Anim.NONE) animate() })
+        if (!titles) {
+        if (c.kind == ClipKind.VIDEO) {
+            Spacer(Modifier.height(16.dp))
+            Text("Speed ramp", style = FcType.Label, color = Fc.Secondary, modifier = pad)
+            Spacer(Modifier.height(8.dp))
+            ChipRow(RAMPS, ramp, "motion_ramp") { ramp = it; ed.speedRamp(c.id, it) }
+            Text(
+                "Slow-mo hit slows down around the playhead. Fine-tune the speed keyframes in Effect Controls › Time Remapping.",
+                style = FcType.BodySmall, color = Fc.Detail, modifier = pad.padding(top = 6.dp),
+            )
+        }
         Spacer(Modifier.height(16.dp))
         Text("Ken Burns", style = FcType.Label, color = Fc.Secondary, modifier = pad)
         Spacer(Modifier.height(8.dp))
@@ -238,6 +263,7 @@ fun MotionPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: 
         Spacer(Modifier.height(8.dp))
         ChipRow(CORNERS, corner, "motion_pip") { corner = it; ed.pictureInPicture(c.id, it, size) }
         ValueSlider("Size", "%.0f %%".format(size * 100), ((size - 0.15) / 0.75).toFloat(), { size = 0.15 + it * 0.75 }, { corner?.let { ed.pictureInPicture(c.id, it, size) } })
+        }
         Spacer(Modifier.height(16.dp))
         Text("Keyframes", style = FcType.Label, color = Fc.Secondary, modifier = pad)
         Spacer(Modifier.height(8.dp))
@@ -267,5 +293,176 @@ private fun ValueSlider(label: String, value: String, fraction: Float, change: (
         Text(label, style = FcType.BodySmall, color = Fc.Body, modifier = Modifier.width(72.dp), maxLines = 1)
         FcSlider(fraction.coerceIn(0f, 1f), change, onDone = done, modifier = Modifier.weight(1f), description = label)
         Text(value, style = FcType.BodySmall, color = Fc.AccentLight, modifier = Modifier.width(56.dp).padding(start = 8.dp))
+    }
+}
+
+private enum class TitleTab(val label: String) { Text("Text"), Style("Style"), Animate("Animate") }
+
+/**
+ * Edit Title (Pro mode; a double tap on a title on the timeline, or a tap on it in the Program
+ * monitor): its text, its look and how it animates. A template's fields come from the template;
+ * a typed title has the full text style. It is moved, scaled and turned on the Program monitor.
+ */
+@Composable
+fun TitleEditorPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: Modifier = Modifier) {
+    var tab by remember(c.id) { mutableStateOf(TitleTab.Text) }
+    var fields by remember(c.id) { mutableStateOf<List<TitleField>?>(null) }
+    LaunchedEffect(c.id, ed.timeline?.revision) { fields = ed.titleFields(c.id) }
+    val f = fields ?: return
+    val template = f.isNotEmpty()
+    ToolPanel("Edit Title", close, modifier, tag = "title_editor_panel") {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            for (t in TitleTab.entries) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clickable(role = Role.Tab) { tab = t }
+                        .testTag("title_tab_${t.name.lowercase()}")
+                        .semantics { contentDescription = t.label },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(t.label, style = FcType.Label, color = if (tab == t) Fc.Title else Fc.Detail, modifier = Modifier.padding(top = 6.dp, bottom = 10.dp))
+                    Box(Modifier.width(48.dp).height(3.dp).clip(CircleShape).background(if (tab == t) Fc.Title else Color.Transparent))
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        val pad = Modifier.padding(horizontal = FcSize.PanelPadding)
+        when (tab) {
+            TitleTab.Text -> if (template) {
+                for (x in f.filter { it.kind == FieldKind.TEXT }) TitleFieldRow(ed, c.id, x)
+            } else {
+                TypedText(ed, c)
+            }
+            TitleTab.Style -> if (template) {
+                val look = f.filter { it.kind != FieldKind.TEXT }
+                if (look.isEmpty()) Text("This title has nothing else to change.", style = FcType.BodySmall, color = Fc.Detail, modifier = pad)
+                for (x in look) TitleFieldRow(ed, c.id, x)
+            } else {
+                TextStyleBody(ed, c)
+            }
+            TitleTab.Animate -> {
+                Text("Drag, pinch or twist the title on the Program monitor to move, size and turn it.", style = FcType.BodySmall, color = Fc.Detail, modifier = pad)
+                Spacer(Modifier.height(12.dp))
+                MotionBody(ed, c, titles = true)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+/** A typed title's text: put in a moment after typing stops (blank text keeps the old). */
+@Composable
+private fun TypedText(ed: EditorController, c: ClipInfo) {
+    var text by remember(c.id) { mutableStateOf(c.text) }
+    LaunchedEffect(text) {
+        kotlinx.coroutines.delay(500)
+        if (text.isNotBlank() && text != c.text) ed.setText(c.id, text)
+    }
+    BasicTextField(
+        text,
+        { text = it },
+        textStyle = TextStyle(fontFamily = Inter, fontSize = 17.sp, color = Fc.Title),
+        cursorBrush = SolidColor(Fc.Title),
+        minLines = 2,
+        maxLines = 8,
+        modifier = Modifier.padding(horizontal = FcSize.PanelPadding).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Fc.Raised).padding(12.dp).testTag("title_text_field"),
+    )
+}
+
+/**
+ * Masks & Green Screen (Pro mode): add a mask that blurs an area, shows only an area or limits an
+ * effect; pick one to move and size it on the Program monitor (drag, pinch), soften, grow,
+ * invert, track or delete it; and key out a green or blue backdrop.
+ */
+@Composable
+fun MasksPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: Modifier = Modifier) {
+    var shape by remember { mutableStateOf(MaskShape.ELLIPSE) }
+    var list by remember(c.id) { mutableStateOf<List<MaskInfo>>(emptyList()) }
+    var effects by remember(c.id) { mutableStateOf<List<io.github.artcraftandroid.rushcraft.core.EffectInfo>>(emptyList()) }
+    var key by remember(c.id) { mutableStateOf<Pair<UInt, Double>?>(null) }
+    LaunchedEffect(c.id, ed.timeline?.revision) {
+        list = ed.clipMasks(c.id)
+        key = ed.greenScreenOf(c.id)
+        ed.loadEffects(c.id)
+        effects = ed.effects.filter { !it.fixed && it.clip == c.id && it.id != "gaussian_blur" && it.id != "ultra_key" }
+        // the active mask stays one that is there
+        val a = ed.activeMask
+        if (a == null || a.clip != c.id || list.none { it.effect == a.effect && it.mask == a.mask }) {
+            ed.activeMask = list.lastOrNull()?.let { EditorController.MaskRef(c.id, it.effect, it.mask) }
+        }
+    }
+    DisposableEffect(Unit) { onDispose { ed.activeMask = null } }
+    var pickEffect by remember { mutableStateOf(false) }
+    ToolPanel("Masks & Green Screen", close, modifier, tag = "masks_panel") {
+        val pad = Modifier.padding(horizontal = FcSize.PanelPadding)
+        Text("Add a mask", style = FcType.Label, color = Fc.Secondary, modifier = pad)
+        Spacer(Modifier.height(8.dp))
+        ChipRow(listOf(MaskShape.ELLIPSE to "Ellipse", MaskShape.RECTANGLE to "Rectangle"), shape, "mask_shape") { shape = it }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SelectChip("Blur area", false, { ed.addMask(c.id, MaskPurpose.BLUR, shape, null) }, tag = "mask_add_blur")
+            SelectChip("Show only area", false, { ed.addMask(c.id, MaskPurpose.SHOW_ONLY, shape, null) }, tag = "mask_add_show")
+            if (effects.isNotEmpty()) SelectChip("Mask an effect…", pickEffect, { pickEffect = !pickEffect }, tag = "mask_add_effect")
+        }
+        if (pickEffect) {
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (e in effects) SelectChip(e.name, false, { pickEffect = false; ed.addMask(c.id, MaskPurpose.EFFECT, shape, e.index) })
+            }
+        }
+        if (list.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text("Masks: drag or pinch the highlighted one on the Program monitor", style = FcType.Label, color = Fc.Secondary, modifier = pad)
+            Spacer(Modifier.height(8.dp))
+            for (m in list) {
+                val ref = EditorController.MaskRef(c.id, m.effect, m.mask)
+                val on = ed.activeMask == ref
+                Row(pad.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    SelectChip(m.label + if (m.animated) " (tracked)" else "", on, { ed.activeMask = ref })
+                    Spacer(Modifier.weight(1f))
+                    SelectChip("Delete", false, { ed.removeMask(ref) })
+                }
+                if (on) {
+                    var feather by remember(ref) { mutableDoubleStateOf(m.feather) }
+                    var grow by remember(ref) { mutableDoubleStateOf(m.expansion) }
+                    var first by remember(ref) { mutableStateOf(true) }
+                    ValueSlider("Soften", "%.0f".format(feather), (feather / 300.0).toFloat(), {
+                        feather = it * 300.0
+                        ed.setMask(ref, feather, grow, m.inverted, merge = !first)
+                        first = false
+                    }, { first = true })
+                    ValueSlider("Grow", "%.0f".format(grow), ((grow + 200.0) / 400.0).toFloat(), {
+                        grow = it * 400.0 - 200.0
+                        ed.setMask(ref, feather, grow, m.inverted, merge = !first)
+                        first = false
+                    }, { first = true })
+                    Row(pad.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SelectChip("Inside out", m.inverted, { ed.setMask(ref, feather, grow, !m.inverted, merge = false) })
+                        SelectChip("Track to the end", false, { ed.trackMask(ref) })
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+        if (c.kind == ClipKind.VIDEO || c.kind == ClipKind.IMAGE) {
+            Spacer(Modifier.height(16.dp))
+            Text("Green screen", style = FcType.Label, color = Fc.Secondary, modifier = pad)
+            Spacer(Modifier.height(8.dp))
+            val green = 0xFF00C040u
+            val blue = 0xFF0050FFu
+            var strength by remember(c.id, key) { mutableDoubleStateOf(key?.second ?: 0.5) }
+            val now = key?.first
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SelectChip("Off", now == null, { ed.greenScreen(c.id, null, strength) }, tag = "key_off")
+                SelectChip("Green", now != null && (now and 0xFFFFu) > 0x8000u && (now shr 16 and 0xFFu) < 0x80u, { ed.greenScreen(c.id, green, strength) }, tag = "key_green")
+                SelectChip("Blue", now != null && (now and 0xFFu) > 0xA0u, { ed.greenScreen(c.id, blue, strength) }, tag = "key_blue")
+            }
+            if (now != null) {
+                ValueSlider("Strength", "%.0f %%".format(strength * 100), strength.toFloat(), { strength = it.toDouble() }, { ed.greenScreen(c.id, now, strength) })
+                Text("Put the clip on a track above the background it should show over.", style = FcType.BodySmall, color = Fc.Detail, modifier = pad)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }

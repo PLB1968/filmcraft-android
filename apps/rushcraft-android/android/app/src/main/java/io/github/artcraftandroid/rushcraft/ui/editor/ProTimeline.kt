@@ -229,7 +229,18 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                             ed, p, ::xOf, ::tOf,
                             onMarker = { at ->
                                 val near = with(density) { 16.dp.toPx() }
-                                p.markers.minByOrNull { abs(xOf(it.start) - at.x) }?.takeIf { abs(xOf(it.start) - at.x) < near }?.let { editingMarker = it }
+                                val m = p.markers.minByOrNull { abs(xOf(it.start) - at.x) }?.takeIf { abs(xOf(it.start) - at.x) < near }
+                                if (m != null) {
+                                    editingMarker = m
+                                } else {
+                                    // a double tap on the ruler: zoom to the selected clips (else the whole sequence)
+                                    val sel = p.clips.filter { it.selected }
+                                    val a = sel.minOfOrNull { it.start } ?: 0L
+                                    val b = sel.maxOfOrNull { it.start + it.duration } ?: span
+                                    val np = TimelineMath.clampZoom((viewport * 0.8f / ((b - a).coerceAtLeast(TPS / 10).toDouble() / TPS)).toFloat(), viewport, span, num, den)
+                                    ed.proPxPerSecond = np
+                                    setScroll(a - (viewport * 0.1f / np * TPS).roundToLong())
+                                }
                             },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
@@ -291,7 +302,7 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                                 )
                             },
                             onGap = { at, track, t ->
-                                menu = ProMenu(at + Offset(headerPx, tracksTop), listOf("Close Gap" to { ed.closeGap(track.id, t) }))
+                                menu = ProMenu(at + Offset(headerPx, tracksTop), listOf("Close Gap" to { ed.closeGap(track.id, t) }, "Close All Gaps on ${track.code}" to { ed.closeAllGaps(track.id) }))
                             },
                             onAddMedia = { at, track, t ->
                                 val where = "${track.code} at ${TimelineMath.timecode(t, num, den)}"
@@ -1142,6 +1153,9 @@ private fun Tracks(
                         p0.clips.firstOrNull { it.track == r.track.id && t >= it.start && t < it.start + it.duration }
                     }
                     var multi = false
+                    // a vertical pinch: the track it resizes and its height (dp) as it goes
+                    var pinchRow: ULong? = null
+                    var pinchH = 0f
                     val result = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                         var r = "up"
                         while (true) {
@@ -1161,6 +1175,8 @@ private fun Tracks(
                         r
                     }
                     val x = down.position.x
+                    // a tap or a long press on the tracks stops playback (scrolling and zooming don't)
+                    if (result != "moved") ed.stop()
                     when (result) {
                         // a long press: the context menu, or the tool's second action
                         null -> {
@@ -1208,7 +1224,8 @@ private fun Tracks(
                         ) {
                             lastTap = null
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            addMediaAt(down.position, hitRow.track, frameAt(x))
+                            // on a title: edit it; elsewhere: add media there
+                            if (hit != null && hit.kind == ClipKind.TEXT) ed.openTitleEditor(hit.id) else addMediaAt(down.position, hitRow.track, frameAt(x))
                         } else {
                             lastTap = down.uptimeMillis to down.position
                             when (ed.proTool) {
@@ -1265,17 +1282,20 @@ private fun Tracks(
                                     val c = ev.changes.firstOrNull { it.pressed } ?: break
                                     dx += c.positionChange().x
                                     ev.changes.forEach { it.consume() }
-                                    bandDrag = draggedBand(band, mode, (dx / ppsNow() * TPS).roundToLong(), frame)
+                                    bandDrag = draggedBand(band, mode, (dx / ppsNow() * TPS).roundToLong(), frame, snap = pNow.snapping)
                                 }
                                 val res = bandDrag
                                 bandDrag = null
-                                if (res != null && (res.duration != band.duration || res.align != band.align)) {
+                                if (res != null && res.free && (res.start != band.start || res.duration != band.duration)) {
+                                    ed.moveTransition(band.id, res.start, res.duration)
+                                } else if (res != null && !res.free && (res.duration != band.duration || res.align != band.align)) {
                                     haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                     ed.editTransition(band.id, duration = res.duration.takeIf { it != band.duration }, align = res.align.takeIf { it != band.align })
                                 }
                                 return@awaitEachGesture
                             }
                             val d = if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
+                            var lastSnap: Long? = null
                             if (d != null) {
                                 drag = d
                                 dragDx = 0f
@@ -1290,16 +1310,37 @@ private fun Tracks(
                                     multi = true
                                     drag = null
                                     ed.showTrim(null)
-                                    val z = ev.calculateZoom()
-                                    val dd = ev.calculatePan()
-                                    if (z != 1f) zoom(z, ev.calculateCentroid().x)
-                                    pan(dd.x, dd.y)
+                                    val a = pressed[0]
+                                    val b = pressed[1]
+                                    val now = b.position - a.position
+                                    val was = b.previousPosition - a.previousPosition
+                                    if (abs(now.y) > abs(now.x) * 1.2f && abs(was.y) > 4f) {
+                                        // fingers one above the other: the track between them grows or shrinks
+                                        val cy = (a.position.y + b.position.y) / 2 + vNow()
+                                        val r = pinchRow ?: rowAt(rowsNow, cy)?.track?.id
+                                        if (r != null) {
+                                            val t = (pNow.videoTracks + pNow.audioTracks).firstOrNull { it.id == r }
+                                            if (pinchRow != r) pinchH = (ed.trackHeights[r] ?: if (t?.video == true) PRO_VIDEO_TRACK else PRO_AUDIO_TRACK).toFloat()
+                                            pinchRow = r
+                                            pinchH = (pinchH * abs(now.y) / abs(was.y)).coerceIn(PRO_TRACK_MIN.toFloat(), PRO_TRACK_MAX.toFloat())
+                                            ed.setTrackHeight(r, pinchH.roundToInt())
+                                        }
+                                    } else {
+                                        val z = ev.calculateZoom()
+                                        val dd = ev.calculatePan()
+                                        if (z != 1f) zoom(z, ev.calculateCentroid().x)
+                                        pan(dd.x, dd.y)
+                                    }
                                 } else if (drag != null) {
                                     val c = pressed.first()
                                     dragDx += c.positionChange().x
                                     dragY = c.position.y + vNow()
                                     val dr = drag
                                     if (dr != null) ed.showTrim(dragView(pNow, dr, dragDelta(pNow, ed.playhead, dr, dragDx, ppsNow(), snapReach)))
+                                    // a tick as the edit snaps to something
+                                    val snapAt = dr?.let { snapPoint(pNow, ed.playhead, it, dragDx, ppsNow(), snapReach) }
+                                    if (snapAt != null && snapAt != lastSnap) haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    lastSnap = snapAt
                                 } else if (!multi) {
                                     val dd = pressed.first().positionChange()
                                     pan(dd.x, dd.y)
@@ -1323,6 +1364,8 @@ private fun Tracks(
         val tracks = p.videoTracks + p.audioTracks
         val moveTarget = dr?.takeIf { it.kind == DragKind.Move }?.let { d -> rowAt(rows, dragY)?.takeIf { r -> r.track.video == tracks.firstOrNull { it.id == d.clip.track }?.video } }
         val moveShift = dr?.takeIf { it.kind == DragKind.Move }?.let { landing(p, ed.playhead, it.clip, dragDx, pps(), snapReach) - it.clip.start } ?: 0L
+        // where a drag has snapped: a yellow line down the timeline
+        val snapLine = dr?.let { snapPoint(p, ed.playhead, it, dragDx, pps(), snapReach) }
         translate(0f, -v) {
             // lanes
             for (r in rows) {
@@ -1435,10 +1478,51 @@ private fun Tracks(
             }
             drawRect(color, Offset(x0, 0f), Size(max(1f, x1 - x0), barH))
         }
+        // a drag snapped here
+        snapLine?.let { st ->
+            val sx = xOf(st)
+            drawLine(Color(0xFFFFD54F), Offset(sx, 0f), Offset(sx, size.height), 1.5.dp.toPx())
+        }
         // the playhead
         val px = xOf(ed.playhead)
         drawLine(Fc.AccentLight, Offset(px, 0f), Offset(px, size.height), 1.5.dp.toPx())
     }
+}
+
+/**
+ * Where drag [d] (by [dx] px) has snapped with Snap on: the cut, playhead, In/Out or marker one of
+ * its moving edges sits on, else null.
+ */
+private fun snapPoint(p: ProTimeline, playhead: Long, d: ToolDrag, dx: Float, pps: Float, reach: Float): Long? {
+    if (!p.snapping) return null
+    val c = d.clip
+    val edges: List<Long> = when (d.kind) {
+        DragKind.Move -> landing(p, playhead, c, dx, pps, reach).let { listOf(it, it + c.duration) }
+        DragKind.Trim, DragKind.Ripple, DragKind.Stretch, DragKind.Roll -> {
+            val delta = dragDelta(p, playhead, d, dx, pps, reach)
+            listOf((if (d.head) c.start else c.start + c.duration) + delta)
+        }
+        DragKind.Slide, DragKind.Forward -> {
+            val delta = dragDelta(p, playhead, d, dx, pps, reach)
+            listOf(c.start + delta, c.start + c.duration + delta)
+        }
+        DragKind.Slip, DragKind.Volume -> return null
+    }
+    if (dx == 0f) return null
+    val frame = TimelineMath.tickOfFrame(1, p.rateNum, p.rateDen)
+    val moving = (listOf(c) + d.group + listOfNotNull(d.partner)).map { it.id }.toSet() +
+        p.clips.filter { d.kind == DragKind.Move && (it.selected || (p.linkedSelection && c.link != null && it.link == c.link)) }.map { it.id }
+    val points = buildList {
+        add(playhead)
+        p.markIn?.let(::add)
+        p.markOut?.let(::add)
+        p.markers.forEach { add(it.start) }
+        p.clips.filter { it.id !in moving }.forEach {
+            add(it.start)
+            add(it.start + it.duration)
+        }
+    }
+    return points.firstOrNull { pt -> edges.any { abs(it - pt) < frame / 2 } }
 }
 
 /**
@@ -1604,20 +1688,44 @@ private fun MarkerDialog(ed: EditorController, m: ProMarker, onClose: () -> Unit
     }
 }
 
-/** A crossfade or fade as a drag would leave it: its place, length and alignment on its cut. */
-data class BandDrag(val id: ULong, val start: Long, val duration: Long, val align: String)
+/**
+ * A crossfade or fade as a drag would leave it: its place, length and alignment on its cut;
+ * [free] when it goes exactly where it was dragged (Snap off), not to an alignment.
+ */
+data class BandDrag(val id: ULong, val start: Long, val duration: Long, val align: String, val free: Boolean = false)
 
 /**
  * Transition [tr] dragged by [dt] ticks: by its left edge ([mode] -1) or right edge (1), changing
  * its length (a centred one grows on both sides), or by its middle (0), moving it to start at,
  * centre on or end at its cut. At least two frames long; whole frames.
  */
-fun draggedBand(tr: ProTransition, mode: Int, dt: Long, frame: Long): BandDrag {
+fun draggedBand(tr: ProTransition, mode: Int, dt: Long, frame: Long, snap: Boolean = true): BandDrag {
     val f = frame.coerceAtLeast(1L)
     val cut = tr.cut
     val a0 = tr.start
     val b0 = tr.start + tr.duration
     val step = (dt / f) * f
+    // Snap off, a crossfade goes wherever it's dragged, a frame at a time, as long as it still
+    // covers its cut (a fade stays on its clip's end)
+    if (!snap && tr.from != null && tr.to != null) {
+        var a = a0
+        var b = b0
+        when (mode) {
+            0 -> {
+                a = (a0 + step).coerceIn(cut - tr.duration, cut)
+                b = a + tr.duration
+            }
+            -1 -> a = (a0 + step).coerceIn(0L, minOf(cut, b0 - 2 * f))
+            else -> b = (b0 + step).coerceAtLeast(maxOf(cut, a0 + 2 * f))
+        }
+        val align = when {
+            a == cut -> "start"
+            b == cut -> "end"
+            abs((a + b) / 2 - cut) < f -> "center"
+            else -> "custom"
+        }
+        return BandDrag(tr.id, a, b - a, align, free = true)
+    }
     return when (mode) {
         0 -> {
             // the middle: which side of the cut it lies on

@@ -92,7 +92,9 @@ fun HomeScreen(vm: AppViewModel) {
                 QuickTile(LucideIcons.FilePlus.glyph(), "New from files", "new_from_files") { vm.newProject(NewProject.Files) }
                 QuickTile(LucideIcons.SquarePlus.glyph(), "New blank project", "new_blank_project") { vm.newProject(NewProject.Blank) }
                 QuickTile(LucideIcons.AudioLines.glyph(), "Extract audio", "extract_audio_button") { vm.newProject(NewProject.ExtractAudio) }
+                QuickTile(LucideIcons.SwatchBook.glyph(), "Templates", "new_from_template") { vm.choosingTemplate = true }
             }
+            if (vm.choosingTemplate) TemplateDialog(vm)
             if (vm.projectList.isNotEmpty()) {
                 Text("Your projects", style = FcType.Header, color = Fc.Title, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp).testTag("home_your_projects_header"))
                 LazyRow(
@@ -153,6 +155,26 @@ private fun HomeTopBar(vm: AppViewModel) {
                     leadingIcon = { GlyphIcon(LucideIcons.Settings.glyph(), Fc.Icon, size = 20.dp) },
                     onClick = { menu = false; vm.show(Screen.Settings) },
                 )
+            }
+        }
+    }
+}
+
+/** Home › Templates: a new project laid out for a Vlog, a Short, a Tutorial or a square post. */
+@Composable
+private fun TemplateDialog(vm: AppViewModel) {
+    var pick by remember { mutableStateOf(io.github.artcraftandroid.rushcraft.core.Starter.VLOG) }
+    val all = listOf(
+        io.github.artcraftandroid.rushcraft.core.Starter.VLOG to ("Vlog (16:9)" to "Opening title, your name on a lower third, end card"),
+        io.github.artcraftandroid.rushcraft.core.Starter.SHORT to ("Short (9:16)" to "A hook title for the first seconds, Subscribe end card"),
+        io.github.artcraftandroid.rushcraft.core.Starter.TUTORIAL to ("Tutorial (16:9)" to "Chapter titles, a face-cam slot, end card"),
+        io.github.artcraftandroid.rushcraft.core.Starter.SQUARE to ("Square (1:1)" to "A title and an end card"),
+    )
+    io.github.artcraftandroid.rushcraft.ui.FcDialog("New from a template", "Start", onConfirm = { vm.newFromTemplate(pick) }, onDismiss = { vm.choosingTemplate = false }) {
+        for ((s, label) in all) {
+            Column(Modifier.fillMaxWidth().clickable { pick = s }.padding(vertical = 8.dp)) {
+                io.github.artcraftandroid.rushcraft.ui.SelectChip(label.first, pick == s, { pick = s }, tag = "template_${s.name.lowercase()}")
+                Text(label.second, style = FcType.BodySmall, color = Fc.Detail, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
             }
         }
     }

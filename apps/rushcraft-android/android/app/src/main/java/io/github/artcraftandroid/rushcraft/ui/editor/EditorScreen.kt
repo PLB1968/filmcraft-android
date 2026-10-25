@@ -304,6 +304,12 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
     // the placement as read (its outline's corners), which a gesture's changes are drawn from
     var base by remember { mutableStateOf<Placement?>(null) }
     var path by remember { mutableStateOf<MotionPath?>(null) }
+    // the Masks panel: the clip's masks drawn, and the active one moved by the gestures
+    var masks by remember { mutableStateOf<List<io.github.artcraftandroid.rushcraft.core.MaskInfo>>(emptyList()) }
+    val maskMode = ed.proMode && ed.panel == Panel.Masks && sel != null
+    LaunchedEffect(sel?.id, t?.revision, maskMode, ed.playhead.takeIf { maskMode && !ed.playing }) {
+        masks = if (maskMode && sel != null) ed.clipMasks(sel.id) else emptyList()
+    }
     // animated motion is read again wherever the playhead stops
     val animated = path?.let { it.path.isNotEmpty() || it.recording } == true
     LaunchedEffect(sel?.id, t?.revision, if (animated && !ed.playing) ed.playhead else 0L) {
@@ -324,7 +330,7 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
             Modifier
                 .size(boxW, boxH)
                 .border(1.dp, Fc.Raised)
-                .pointerInput(sel?.id, movable, t?.width, t?.height) {
+                .pointerInput(sel?.id, movable, t?.width, t?.height, maskMode) {
                     val frameW = t?.width?.toFloat() ?: return@pointerInput
                     val k = size.width / frameW // screen px per frame px
                     awaitEachGesture {
@@ -340,7 +346,12 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
                             val zoom = ev.calculateZoom()
                             val rot = ev.calculateRotation()
                             if (!moved && (pan.getDistance() > viewConfiguration.touchSlop / 4 || zoom != 1f || rot != 0f) && ev.changes.any { it.positionChanged() }) moved = true
-                            if (moved && movable && p != null && sel != null) {
+                            val am = ed.activeMask?.takeIf { maskMode && it.clip == sel?.id }
+                            if (moved && am != null) {
+                                // the Masks panel: the gesture moves and sizes the active mask
+                                ed.transformMask(am, (pan.x / k).toDouble(), (pan.y / k).toDouble(), zoom.toDouble())
+                                ev.changes.forEach { it.consume() }
+                            } else if (moved && movable && p != null && sel != null) {
                                 var nx = p.x + pan.x / k
                                 var ny = p.y + pan.y / k
                                 var nr = p.rotation + rot
@@ -367,7 +378,16 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
                             }
                         }
                         // Pro mode's Type tool: a tap in the Program monitor starts a title
-                        if (!moved) if (ed.proMode && ed.proTool == ProTool.Type) ed.titleAt = ed.playhead else ed.togglePlay()
+                        // a tap on the selected title (Pro mode) edits it
+                        val onTitle = !moved && ed.proMode && sel != null && sel.kind == ClipKind.TEXT &&
+                            placement?.let { insideOutline(it, (down.position.x / k).toDouble(), (down.position.y / k).toDouble()) } == true
+                        if (!moved) {
+                            when {
+                                ed.proMode && ed.proTool == ProTool.Type -> ed.titleAt = ed.playhead
+                                onTitle && sel != null -> ed.openTitleEditor(sel.id)
+                                else -> ed.togglePlay()
+                            }
+                        }
                     }
                 }
                 .semantics { contentDescription = "Preview" },
@@ -399,8 +419,26 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
                     }
                 }
             }
+            // masks: their outlines, the active one bright
+            if (maskMode && t != null && masks.isNotEmpty()) {
+                val active = ed.activeMask
+                Canvas(Modifier.fillMaxSize()) {
+                    val k = size.width / t.width.toFloat()
+                    for (m in masks) {
+                        val o = m.outline
+                        if (o.size < 6) continue
+                        val line = Path().apply {
+                            moveTo((o[0] * k).toFloat(), (o[1] * k).toFloat())
+                            for (i in 2 until o.size - 1 step 2) lineTo((o[i] * k).toFloat(), (o[i + 1] * k).toFloat())
+                            close()
+                        }
+                        val on = active != null && active.effect == m.effect && active.mask == m.mask
+                        drawPath(line, if (on) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.5f), style = Stroke((if (on) 2.5 else 1.5).dp.toPx()))
+                    }
+                }
+            }
             val pl = placement
-            if (movable && pl != null && t != null) {
+            if (movable && pl != null && t != null && !maskMode) {
                 val b0 = base
                 Canvas(Modifier.fillMaxSize()) {
                     val k = size.width / t.width.toFloat()
@@ -472,3 +510,28 @@ internal fun Preview(ed: EditorController, modifier: Modifier) {
 
 @Suppress("unused")
 private fun Dp.half() = this / 2
+
+/** Whether frame point ([x], [y]) is inside placement [p]'s outline (its corners, else its box). */
+internal fun insideOutline(p: Placement, x: Double, y: Double): Boolean {
+    val c = p.corners
+    if (c.size != 8) {
+        val w = p.width * p.scale / 2
+        val h = p.height * p.scale / 2
+        return abs(x - p.x) <= w && abs(y - p.y) <= h
+    }
+    // the same side of every edge of the (convex) outline
+    var sign = 0
+    for (i in 0 until 4) {
+        val ax = c[2 * i]
+        val ay = c[2 * i + 1]
+        val bx = c[(2 * i + 2) % 8]
+        val by = c[(2 * i + 3) % 8]
+        val cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax)
+        val s = if (cross > 0) 1 else if (cross < 0) -1 else 0
+        if (s != 0) {
+            if (sign != 0 && s != sign) return false
+            sign = s
+        }
+    }
+    return true
+}

@@ -47,8 +47,8 @@ data class PickRequest(val kind: PickKind, val onPicked: (List<Uri>) -> Unit)
 /** An export's progress. */
 sealed interface ExportPhase {
     data object Settings : ExportPhase
-    data class Running(val progress: Float) : ExportPhase
-    data class Done(val uri: Uri, val path: String) : ExportPhase
+    data class Running(val progress: Float, val number: Int = 1, val of: Int = 1) : ExportPhase
+    data class Done(val uri: Uri, val path: String, val made: Int = 1) : ExportPhase
     data class Failed(val message: String) : ExportPhase
 }
 
@@ -159,6 +159,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         micRequests.trySend(onGranted)
     }
 
+    val cameraRequests = Channel<() -> Unit>(Channel.BUFFERED)
+
+    override fun requestCamera(onGranted: () -> Unit) {
+        cameraRequests.trySend(onGranted)
+    }
+
     // ---- navigation ----
 
     fun show(s: Screen) {
@@ -203,6 +209,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
                     editor?.importAndAdd(listOf(u), audio = true, first = true)
                 }
             }
+        }
+    }
+
+    /** Home › Templates is choosing a starter. */
+    var choosingTemplate by mutableStateOf(false)
+
+    /** A new project from a template (Vlog, Short, Tutorial, Square): its titles and markers laid out. */
+    fun newFromTemplate(starter: io.github.artcraftandroid.rushcraft.core.Starter) {
+        choosingTemplate = false
+        val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
+        viewModelScope.launch {
+            val f = io.github.artcraftandroid.rushcraft.core.starterFrame(starter)
+            val p = withContext(Dispatchers.IO) { projects.create(projects.todaysName(), f[0].toInt(), f[1].toInt()) }
+            open(e, p, fresh = true)
+            editor?.applyStarter(starter)
         }
     }
 
@@ -302,6 +323,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
 
     fun exportPlan() = runCatching { editor?.engine?.session?.exportPlan(exportSettings) }.getOrNull()
 
+    /** More versions to make after this one (another shape each, e.g. 16:9 next to a Short). */
+    val exportAlso = androidx.compose.runtime.mutableStateListOf<ExportShape>()
+
     fun startExport() {
         val ed = editor ?: return
         val plan = exportPlan()
@@ -314,38 +338,52 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         }
         // the project's name, with only the characters a file name can't hold replaced
         val name = ed.project.name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().take(100).ifBlank { "RushCraft" }
-        val out = File(dir, "$name.mp4")
+        val t = ed.timeline
+        val queue = listOf<ExportShape?>(null) + exportAlso.filter { t == null || it.num * t.height.toInt() != it.den * t.width.toInt() }
         exportPhase = ExportPhase.Running(0f)
         exportJob = viewModelScope.launch {
+            var last: ExportPhase.Done? = null
             try {
                 ed.save()
-                val job = ed.engine.command { startExport(out.absolutePath, exportSettings) }
-                exportEngineJob = job
-                while (isActive) {
-                    val st = ed.engine.command { exportStatus(job) }
-                    if (st.finished) {
-                        if (st.error != null) {
-                            out.delete()
-                            exportPhase = if (st.error == "cancelled") ExportPhase.Settings else ExportPhase.Failed(st.error ?: "The export failed.")
-                        } else {
-                            val uri = withContext(Dispatchers.IO) { saveToMovies(out, name) }
-                            exportPhase = ExportPhase.Done(uri, out.absolutePath)
+                for ((i, shape) in queue.withIndex()) {
+                    // another shape: the sequence reframed for this one, put back after
+                    if (shape != null) ed.engine.command { setAspect(shape.num.toUInt(), shape.den.toUInt()) }
+                    val label = if (shape == null) name else "$name ${shape.label}"
+                    val out = File(dir, "$label.mp4")
+                    try {
+                        val job = ed.engine.command { startExport(out.absolutePath, exportSettings) }
+                        exportEngineJob = job
+                        while (isActive) {
+                            val st = ed.engine.command { exportStatus(job) }
+                            if (st.finished) {
+                                if (st.error != null) {
+                                    out.delete()
+                                    exportPhase = if (st.error == "cancelled") ExportPhase.Settings else ExportPhase.Failed(st.error ?: "The export failed.")
+                                    return@launch
+                                }
+                                val uri = withContext(Dispatchers.IO) { saveToMovies(out, label) }
+                                last = ExportPhase.Done(uri, out.absolutePath, made = i + 1)
+                                break
+                            }
+                            // keep the last stretch for saving to the gallery
+                            exportPhase = ExportPhase.Running(((i + st.progress * 0.95) / queue.size).toFloat(), i + 1, queue.size)
+                            delay(250)
                         }
-                        break
+                    } finally {
+                        if (shape != null) ed.engine.command { undo() }
                     }
-                    // keep the last stretch for saving to the gallery
-                    exportPhase = ExportPhase.Running((st.progress * 0.95).toFloat())
-                    delay(250)
                 }
+                last?.let { exportPhase = it }
             } catch (e: Exception) {
-                out.delete()
                 exportPhase = ExportPhase.Failed(e.userMessage)
             } finally {
                 exportEngineJob = null
+                ed.refreshAfterExport()
                 // the export's frame buffers are kept for another export; give them back now
                 viewModelScope.launch(Dispatchers.IO) { runCatching { trimMemory() } }
             }
         }
+        if (queue.size > 1) tell("Making ${queue.size} videos, one after another.")
     }
 
     fun cancelExport() {
@@ -406,6 +444,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
  * One-tap export settings for the short-video apps: upright 9:16, 1080 × 1920 at 30 frames a
  * second, high quality (each app recompresses what it gets, so more is wasted upload time).
  */
+/** Another shape to export the same edit in: the sequence reframed, then put back. */
+enum class ExportShape(val label: String, val num: Int, val den: Int) {
+    Wide("16x9", 16, 9),
+    Tall("9x16", 9, 16),
+    Square("1x1", 1, 1),
+}
+
 enum class ExportPreset(val label: String, val settings: ExportSettings) {
     Shorts("Shorts", ExportSettings(1080u, 30u, ExportQuality.HIGH)),
     Reels("Reels", ExportSettings(1080u, 30u, ExportQuality.HIGH)),

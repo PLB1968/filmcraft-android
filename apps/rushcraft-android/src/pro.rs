@@ -904,6 +904,8 @@ fn effects_of(c: &TrackItem, at: Tick) -> Vec<EffectInfo> {
                 .iter()
                 .map(|d| {
                     let prm = e.param(d.id);
+                    // Time Remapping keys where the clip would be without its ramp
+                    let mt = if e.effect == "time_remap" { remap_time(c, at) } else { mt };
                     let value = prm.map(|p| p.value_at(mt)).unwrap_or_else(|| d.default.clone());
                     let (kind, min, max, soft_min, soft_max, unit, decimals, choices) = param_shape(&d.kind);
                     let keyframes = prm
@@ -990,9 +992,47 @@ fn param_kind(s: &Session, clip: u64, effect: u32, param: &str) -> Option<filmcr
     Some(e.def()?.param(param)?.kind.clone())
 }
 
+/// Whether effect `effect` of clip `clip` is its Time Remapping (speed ramps).
+fn is_remap(s: &Session, clip: u64, effect: u32) -> bool {
+    model::sequence(s)
+        .ok()
+        .and_then(|(_, q)| model::find(q, ClipId(clip)))
+        .and_then(|f| f.clip.effects.get(effect as usize))
+        .is_some_and(|e| e.effect == "time_remap")
+}
+
+/// Where Time Remapping keys at timeline time `t` of `c`: the media time the clip would show
+/// there without its ramp (see `TrackItem::source_time_at`).
+pub(crate) fn remap_time(c: &TrackItem, t: Tick) -> Tick {
+    let rel = (t.clamp(c.start, (c.end() - Tick(1)).max(c.start)) - c.start).0 as f64;
+    Tick(c.source_in.0 + (rel * c.speed.abs()).round() as i64)
+}
+
+/// Change clip `clip`'s Time Remapping speed at the playhead with `f` (one undo step, or folded
+/// into the last one with the same `merge` key).
+fn remap_edit(s: &mut Session, clip: u64, merge: Option<String>, f: impl FnOnce(&mut filmcraft_project::Param, Tick)) -> Result<(), MobileError> {
+    let ph = s.playhead();
+    s.edit_sequence_as("Change Speed", merge.as_deref(), |q, _, _| {
+        let c = q.find_item_mut(ClipId(clip)).map(|x| x.1).ok_or_else(|| filmcraft_engine::EngineError::Other("That clip is no longer on the timeline.".into()))?;
+        let u = remap_time(c, ph);
+        let e = c.effects.iter_mut().find(|e| e.effect == "time_remap").ok_or_else(|| filmcraft_engine::EngineError::Other("no time remapping".into()))?;
+        e.enabled = true;
+        if let Some(p) = e.param_mut("speed") {
+            f(p, u);
+        }
+        Ok(())
+    })?;
+    crate::edits::settle(s);
+    Ok(())
+}
+
 /// Set a parameter at the playhead (a keyframe there when its stopwatch is on); `merge` makes a
 /// drag one undo step, `begin` starts a new one (the first change of a drag).
 pub(crate) fn set_param(s: &mut Session, clip: u64, effect: u32, param: &str, value: &[f64], merge: bool, begin: bool) -> Result<(), MobileError> {
+    if is_remap(s, clip, effect) {
+        let v = value.first().copied().unwrap_or(100.0);
+        return remap_edit(s, clip, merge.then(|| format!("remap:{clip}")).filter(|_| !begin), |p, u| p.set_at(u, filmcraft_project::ParamValue::Float(v)));
+    }
     let kind = param_kind(s, clip, effect, param);
     let v = param_json(kind.as_ref(), value)?;
     ex(s, "effects.setParam", json!({"clip": clip, "effect": effect, "param": param, "value": v, "merge": merge, "begin": begin}))?;
@@ -1002,12 +1042,22 @@ pub(crate) fn set_param(s: &mut Session, clip: u64, effect: u32, param: &str, va
 /// The stopwatch: start animating (a first keyframe at the playhead) or stop (keyframes go, the
 /// value at the playhead stays).
 pub(crate) fn toggle_animation(s: &mut Session, clip: u64, effect: u32, param: &str) -> Result<(), MobileError> {
+    if is_remap(s, clip, effect) {
+        return remap_edit(s, clip, None, |p, u| p.toggle_animation(u));
+    }
     ex(s, "effects.toggleAnimation", json!({"clip": clip, "effect": effect, "param": param}))?;
     Ok(())
 }
 
 /// Add/Remove Keyframe at the playhead.
 pub(crate) fn toggle_keyframe(s: &mut Session, clip: u64, effect: u32, param: &str) -> Result<(), MobileError> {
+    if is_remap(s, clip, effect) {
+        return remap_edit(s, clip, None, |p, u| {
+            if !p.remove_keyframe_at(u) {
+                p.add_keyframe(u);
+            }
+        });
+    }
     ex(s, "effects.addKeyframe", json!({"clip": clip, "effect": effect, "param": param}))?;
     Ok(())
 }
@@ -1364,6 +1414,13 @@ pub(crate) fn edit_transition(
     Ok(())
 }
 
+/// Put transition `id` at `start` for `duration` (ticks, snapped to frames): a free move or
+/// resize on the timeline, anywhere that still covers its cut.
+pub(crate) fn move_transition(s: &mut Session, id: u64, start: i64, duration: i64) -> Result<(), MobileError> {
+    ex(s, "sequence.setTransition", json!({ "transition": id, "start": start.max(0), "duration": duration.max(1) }))?;
+    Ok(())
+}
+
 /// Set one of transition `id`'s own settings.
 pub(crate) fn set_transition_param(s: &mut Session, id: u64, param: &str, value: &[f64], merge: bool, begin: bool) -> Result<(), MobileError> {
     let kind = {
@@ -1435,6 +1492,37 @@ pub(crate) fn remove_transition(s: &mut Session, transition: u64) -> Result<(), 
 pub(crate) fn close_gap(s: &mut Session, track: u64, time: i64) -> Result<(), MobileError> {
     ex(s, "sequence.closeGap", json!({"track": track, "time": time.max(0)}))?;
     Ok(())
+}
+
+/// Close every gap between clips on `track` (one undo step); returns how many.
+pub(crate) fn close_all_gaps(s: &mut Session, track: u64) -> Result<u32, MobileError> {
+    let n = s.edit_group("Close All Gaps", |s| {
+        let mut n = 0u32;
+        // gaps one at a time from the left: each close moves the rest
+        for _ in 0..10_000 {
+            let gap = {
+                let Some(q) = s.active_sequence() else { break };
+                let Some(t) = q.all_tracks().find(|t| t.id.0 == track) else { break };
+                let mut items: Vec<(Tick, Tick)> = t.items.iter().map(|c| (c.start, c.end())).collect();
+                items.sort();
+                let mut end = Tick::ZERO;
+                let mut found = None;
+                for (a, b) in items {
+                    if a > end && end > Tick::ZERO {
+                        found = Some(end + Tick((a - end).0 / 2));
+                        break;
+                    }
+                    end = end.max(b);
+                }
+                found
+            };
+            let Some(at) = gap else { break };
+            s.execute("sequence.closeGap", json!({"track": track, "time": at.0}))?;
+            n += 1;
+        }
+        Ok(n)
+    })?;
+    Ok(n)
 }
 
 /// Crossfades that no longer sit on a cut (their clips trimmed apart, moved, covered or gone)

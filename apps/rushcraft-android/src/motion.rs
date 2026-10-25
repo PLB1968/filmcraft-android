@@ -5,7 +5,7 @@
 use filmcraft_engine::{EngineError, Session};
 use filmcraft_geom::Vec2;
 use filmcraft_project::{ClipId, Interpolation, Param, ParamValue, TrackItem, TrackKind};
-use filmcraft_time::Tick;
+use filmcraft_time::{TICKS_PER_SECOND, Tick};
 
 use crate::placement::{content, motion_time};
 use crate::{MobileError, edits, model};
@@ -348,4 +348,72 @@ pub(crate) fn path(s: &Session, id: u64) -> Result<MotionPath, MobileError> {
     let path = (0..=N).flat_map(|i| at(c.effect_time_at(c.start + Tick(last.0 * i / N)))).collect();
     let keys = m.param("position").map(|p| p.keyframes.iter().flat_map(|k| at(k.time)).collect()).unwrap_or_default();
     Ok(MotionPath { recording, path, keys })
+}
+
+/// A speed ramp over a whole clip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Ramp {
+    /// Back to the clip's own speed (the ramp's keyframes go).
+    None,
+    /// Normal, a second of slow motion around the playhead (or the middle), normal again.
+    SlowMoHit,
+    /// Faster through the first part, slower through the next, then normal.
+    SpeedUpThenSlow,
+    /// Starts slow and comes up to speed.
+    RampIn,
+    /// Slows down towards the end.
+    RampOut,
+}
+
+/// Give clip `id` speed ramp `ramp` (Time Remapping keyframes, editable in Effect Controls).
+/// The picture ramps; the clip's sound can't follow, so it is muted while a ramp is on (and
+/// heard again with [`Ramp::None`]). Returns whether the sound was muted.
+pub(crate) fn speed_ramp(s: &mut Session, id: u64, ramp: Ramp) -> Result<bool, MobileError> {
+    let (rel_at, partner) = {
+        let (_, seq) = model::sequence(s)?;
+        let f = model::find(seq, ClipId(id))
+            .filter(|f| f.kind == TrackKind::Video)
+            .ok_or_else(|| MobileError::Command("Pick a video clip for a speed ramp.".into()))?;
+        let c = f.clip;
+        let ph = s.playhead();
+        let rel = if ph > c.start && ph < c.end() { (ph - c.start).0 as f64 / c.duration.0.max(1) as f64 } else { 0.5 };
+        (rel, model::partner(seq, c, TrackKind::Audio).map(|a| (a.clip.id, a.clip.enabled)))
+    };
+    let sec = TICKS_PER_SECOND as f64;
+    s.edit_sequence_as(if ramp == Ramp::None { "Remove Speed Ramp" } else { "Speed Ramp" }, None, |q, _, _| {
+        let c = q.find_item_mut(ClipId(id)).map(|x| x.1).ok_or_else(|| EngineError::Other("That clip is no longer on the timeline.".into()))?;
+        let (s0, base, dur) = (c.source_in.0 as f64, c.speed.abs().max(1e-6), c.duration.0 as f64);
+        // keyframes at the media time the clip would show at that point without the ramp
+        let at = |frac: f64| Tick((s0 + frac.clamp(0.0, 1.0) * dur * base).round() as i64);
+        let plan: Vec<(f64, f64)> = match ramp {
+            Ramp::None => vec![],
+            Ramp::SlowMoHit => {
+                // a second of 30 % around the moment, eased in and out over 0.3 s
+                let half = (0.5 * sec / dur).min(0.25);
+                let ease = (0.3 * sec / dur).min(0.15);
+                let m = rel_at.clamp(half + ease, 1.0 - half - ease);
+                vec![(m - half - ease, 100.0), (m - half, 30.0), (m + half, 30.0), (m + half + ease, 100.0)]
+            }
+            Ramp::SpeedUpThenSlow => vec![(0.0, 100.0), (0.3, 250.0), (0.6, 40.0), (0.85, 40.0), (1.0, 100.0)],
+            Ramp::RampIn => vec![(0.0, 30.0), (0.4, 100.0)],
+            Ramp::RampOut => vec![(0.6, 100.0), (1.0, 30.0)],
+        };
+        let e = c.effects.iter_mut().find(|e| e.effect == "time_remap").ok_or_else(|| EngineError::Other("no time remapping".into()))?;
+        e.enabled = true;
+        let p = e.param_mut("speed").ok_or_else(|| EngineError::Other("no speed".into()))?;
+        p.keyframes.clear();
+        p.value = ParamValue::Float(100.0);
+        for (frac, v) in plan {
+            key(p, at(frac), ParamValue::Float(v), Interpolation::Bezier, 0.5);
+        }
+        // the sound can't follow a ramp: muted while one is on, heard again without
+        if let Some((a, _)) = partner
+            && let Some((_, x)) = q.find_item_mut(a)
+        {
+            x.enabled = ramp == Ramp::None;
+        }
+        Ok(())
+    })?;
+    edits::settle(s);
+    Ok(ramp != Ramp::None && partner.is_some_and(|(_, on)| on))
 }

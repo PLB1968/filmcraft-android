@@ -40,6 +40,28 @@ class MainActivity : ComponentActivity() {
         if (ok) run?.invoke() else vm.tell("RushCraft needs the microphone to record a voice-over. You can allow it in Settings.")
     }
 
+    private var cameraGranted: (() -> Unit)? = null
+    private val cameraPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        val run = cameraGranted
+        cameraGranted = null
+        if (r[Manifest.permission.CAMERA] == true || checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            run?.invoke()
+        } else {
+            vm.tell("RushCraft needs the camera to record. You can allow it in Settings.")
+        }
+    }
+
+    /** The camera (and the microphone for its sound); [onGranted] once the camera may be used. */
+    private fun askCamera(onGranted: () -> Unit) {
+        val need = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (need.isEmpty()) {
+            onGranted()
+            return
+        }
+        cameraGranted = onGranted
+        cameraPerms.launch(need.toTypedArray())
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // always dark: light bar icons, the screens paint their own bands
         enableEdgeToEdge(SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT))
@@ -48,6 +70,7 @@ class MainActivity : ComponentActivity() {
         setContent { RushCraftTheme { AppRoot(vm) } }
         lifecycleScope.launch { for (r in vm.pickRequests) launchPicker(r) }
         lifecycleScope.launch { for (r in vm.micRequests) askMicrophone(r) }
+        lifecycleScope.launch { for (r in vm.cameraRequests) askCamera(r) }
         lifecycleScope.launch {
             for (uri in vm.shareRequests) {
                 val send = Intent(Intent.ACTION_SEND).setType("video/mp4").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

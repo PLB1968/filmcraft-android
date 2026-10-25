@@ -89,10 +89,12 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Color -> ColorPanel(ed, close, modifier)
         Panel.Titles -> TitlesPanel(ed, close, modifier)
         Panel.Motion -> clip?.let { MotionPanel(ed, it, close, modifier) }
+        Panel.Masks -> clip?.let { MasksPanel(ed, it, close, modifier) }
+        is Panel.EditTitle -> ed.clipInfo(panel.clip)?.let { TitleEditorPanel(ed, it, close, modifier) }
         is Panel.TextInput -> {}
     }
     // a panel whose clip went away closes
-    val standalone = panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Color || panel == Panel.Titles
+    val standalone = panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Color || panel == Panel.Titles || panel is Panel.EditTitle
     if (clip == null && !standalone) {
         LaunchedEffect(Unit) { ed.panel = null }
     }

@@ -41,6 +41,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import io.github.artcraftandroid.rushcraft.core.ExportQuality
 import io.github.artcraftandroid.rushcraft.ui.DialogButton
 import io.github.artcraftandroid.rushcraft.ui.ExportPreset
+import io.github.artcraftandroid.rushcraft.ui.ExportShape
 import io.github.artcraftandroid.rushcraft.engine.toBitmap
 import io.github.artcraftandroid.rushcraft.ui.AppViewModel
 import io.github.artcraftandroid.rushcraft.ui.ExportPhase
@@ -147,15 +148,27 @@ fun ExportScreen(vm: AppViewModel) {
                             Text("Export settings", style = FcType.Label, color = Fc.Body, modifier = Modifier.weight(1f))
                             GlyphIcon(LucideIcons.ChevronRight.glyph(), Fc.Body, size = 20.dp)
                         }
-                        PrimaryButton("Export video", { vm.startExport() }, tag = "export_button")
+                        // more versions in other shapes, made one after another
+                        Text("Also export as", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
+                            for (sh in ExportShape.entries) {
+                                val same = t != null && sh.num * t.height.toInt() == sh.den * t.width.toInt()
+                                if (same) continue
+                                val on = sh in vm.exportAlso
+                                SelectChip(sh.label.replace('x', ':'), on, { if (on) vm.exportAlso.remove(sh) else vm.exportAlso.add(sh) }, tag = "export_also_${sh.name.lowercase()}")
+                            }
+                        }
+                        val n = 1 + vm.exportAlso.count { sh -> t == null || sh.num * t.height.toInt() != sh.den * t.width.toInt() }
+                        PrimaryButton(if (n > 1) "Export $n videos" else "Export video", { vm.startExport() }, tag = "export_button")
                     }
                     is ExportPhase.Running -> {
                         Text("${Math.round(phase.progress * 100)}%", style = FcType.Header, color = Fc.Title, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                        if (phase.of > 1) Text("Video ${phase.number} of ${phase.of}", style = FcType.BodySmall, color = Fc.Detail, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                         LinearProgressIndicator(progress = { phase.progress }, color = Fc.Accent, trackColor = Fc.SliderOff, modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape))
                         Text("Keep RushCraft open until your video is ready.", style = FcType.BodySmall, color = Fc.Detail, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                     }
                     is ExportPhase.Done -> {
-                        Text("Saved to your phone's Movies folder.", style = FcType.BodySmall, color = Fc.Detail, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                        Text(if (phase.made > 1) "${phase.made} videos saved to your phone's Movies folder." else "Saved to your phone's Movies folder.", style = FcType.BodySmall, color = Fc.Detail, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                         PrimaryButton("Share", { vm.share(phase.uri) }, tag = "export_share_button")
                     }
                     is ExportPhase.Failed -> {

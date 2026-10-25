@@ -36,6 +36,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -163,6 +165,20 @@ private enum class StyleTab(val label: String) { Presets("Presets"), Font("Font"
 /** Text ▸ Style: presets, fonts, colours, alignment and width. */
 @Composable
 fun TextStylePanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifier: Modifier = Modifier) {
+    val scope = rememberCoroutineScope()
+    ToolPanel(
+        "Style", close, modifier, tag = "text_style_panel",
+        actions = {
+            PanelAction(LucideIcons.CopyCheck.glyph(), "Apply to all", {
+                scope.launch { ed.textStyle(c.id)?.let { ed.setTextStyle(c.id, it, false, all = true) } }
+            }, tag = "text_style_action_apply_to_all")
+        },
+    ) { TextStyleBody(ed, c) }
+}
+
+/** A text clip's style, as tabs: presets, font, colour, layout. */
+@Composable
+fun TextStyleBody(ed: EditorController, c: ClipInfo) {
     var tab by remember { mutableStateOf(StyleTab.Presets) }
     val loaded by produceState<TextStyle?>(null, c.id, ed.timeline?.revision) { value = ed.textStyle(c.id) }
     var style by remember(c.id) { mutableStateOf<TextStyle?>(null) }
@@ -172,10 +188,7 @@ fun TextStylePanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modifie
         style = s
         ed.setTextStyle(c.id, s, merge)
     }
-    ToolPanel(
-        "Style", close, modifier, tag = "text_style_panel",
-        actions = { PanelAction(LucideIcons.CopyCheck.glyph(), "Apply to all", { ed.setTextStyle(c.id, st, false, all = true) }, tag = "text_style_action_apply_to_all") },
-    ) {
+    Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
             for (t in StyleTab.entries) {
                 Column(
