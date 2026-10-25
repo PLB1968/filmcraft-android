@@ -270,6 +270,8 @@ pub(crate) struct CaptionJob {
     cancel: AtomicBool,
     heard: Mutex<Option<Result<Vec<(ItemId, Transcript)>, String>>>,
     applied: Mutex<Option<Result<u32, String>>>,
+    /// Make captions from what is heard (else only keep the transcripts, for Edit by Text).
+    captions: bool,
 }
 
 impl CaptionJob {
@@ -299,6 +301,15 @@ fn transcriber(model: &str) -> Result<Arc<dyn Transcriber>, String> {
 
 /// Start making captions with speech model `model` in `language` ("" or "auto" to detect it).
 pub(crate) fn start(s: &Session, model: &str, language: &str) -> Result<Arc<CaptionJob>, MobileError> {
+    start_job(s, model, language, true)
+}
+
+/// Start transcribing the open sequence's sound (no captions): Edit by Text's transcript.
+pub(crate) fn start_transcript(s: &Session, model: &str, language: &str) -> Result<Arc<CaptionJob>, MobileError> {
+    start_job(s, model, language, false)
+}
+
+fn start_job(s: &Session, model: &str, language: &str, captions: bool) -> Result<Arc<CaptionJob>, MobileError> {
     if !PHONE_MODELS.contains(&model) {
         return Err(MobileError::Command(format!("Unknown speech model {model}.")));
     }
@@ -327,7 +338,7 @@ pub(crate) fn start(s: &Session, model: &str, language: &str) -> Result<Arc<Capt
         }
     }
     if !any {
-        return Err(MobileError::Command("There's no sound to make captions from.".into()));
+        return Err(MobileError::Command(if captions { "There's no sound to make captions from." } else { "There's no sound to transcribe." }.into()));
     }
     let job = Arc::new(CaptionJob {
         progress: AtomicU64::new(0),
@@ -335,6 +346,7 @@ pub(crate) fn start(s: &Session, model: &str, language: &str) -> Result<Arc<Capt
         cancel: AtomicBool::new(false),
         heard: Mutex::new(None),
         applied: Mutex::new(None),
+        captions,
     });
     let j = job.clone();
     let model = model.to_string();
@@ -406,7 +418,8 @@ pub(crate) fn status(s: &mut Session, job: &CaptionJob) -> CaptionStatus {
     let heard = job.heard.lock().unwrap_or_else(PoisonError::into_inner).take();
     if let Some(r) = heard {
         let applied = match r {
-            Ok(t) => make_captions(s, t).map_err(|e| e.to_string()),
+            Ok(t) if job.captions => make_captions(s, t).map_err(|e| e.to_string()),
+            Ok(t) => keep_transcripts(s, t).map_err(|e| e.to_string()),
             Err(e) => Err(e),
         };
         *job.applied.lock().unwrap_or_else(PoisonError::into_inner) = Some(applied);
@@ -481,6 +494,20 @@ fn phone_words(seq: &Sequence, transcripts: &BTreeMap<ItemId, Arc<Transcript>>) 
     }
     out.sort_by_key(|w| (w.start, w.track));
     out
+}
+
+/// Fold transcripts into the project (one undo step when there are new ones); returns how many words
+/// the open sequence's transcript has.
+fn keep_transcripts(s: &mut Session, heard: Vec<(ItemId, Transcript)>) -> Result<u32, MobileError> {
+    if !heard.is_empty() {
+        s.edit("Transcribe", |pr, _| {
+            for (item, t) in heard {
+                pr.transcripts.insert(item, Arc::new(t));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(u32::try_from(filmcraft_engine::transcript::sequence_words(s).len()).unwrap_or(u32::MAX))
 }
 
 /// Fold transcripts into the project and turn the open sequence's words into captions, in place of

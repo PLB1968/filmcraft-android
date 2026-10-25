@@ -129,6 +129,8 @@ sealed interface Panel {
     data class EditTitle(val clip: ULong) : Panel
     /** Pro mode: the selected clip's masks and green screen. */
     data object Masks : Panel
+    /** Pro mode: Edit by Text, the sequence's transcript. */
+    data object EditText : Panel
 }
 
 /** The tool bar's submenus. */
@@ -880,6 +882,78 @@ class EditorController(
                 captionJob = null
                 captionProgress = null
             }
+            refresh()
+        }
+    }
+
+    // ---- Edit by Text ----
+
+    /** The transcript being made: how far along (null when nothing is running). */
+    var transcriptProgress by mutableStateOf<CaptionStatus?>(null)
+        private set
+
+    /** Transcribe the sequence's sound (no captions) with [model] in [language]. */
+    fun transcribe(model: String, language: String) {
+        if (transcriptProgress != null || captionProgress != null) return
+        stop()
+        transcriptProgress = CaptionStatus(0.0, "Getting ready…", false, null, 0u)
+        scope.launch {
+            try {
+                val job = engine.command { startTranscript(model, language) }
+                captionJob = job
+                while (true) {
+                    val st = engine.command { captionStatus(job) }
+                    transcriptProgress = st
+                    if (st.finished) {
+                        when {
+                            st.error == "cancelled" -> {}
+                            st.error != null -> host.tell(st.error ?: "")
+                            st.captions == 0u -> host.tell("No speech was heard.")
+                        }
+                        break
+                    }
+                    delay(300)
+                }
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            } finally {
+                captionJob = null
+                transcriptProgress = null
+            }
+            refresh()
+        }
+    }
+
+    suspend fun textView(): io.github.artcraftandroid.rushcraft.core.TextView? = runCatching { engine.command { textView() } }.getOrNull()
+
+    /** Delete these runs of words: the sequence is cut there and closes up. */
+    fun deleteWords(ranges: List<io.github.artcraftandroid.rushcraft.core.WordRange>) {
+        if (ranges.isEmpty()) return
+        stop()
+        scope.launch {
+            runCatching { engine.command { deleteWords(ranges) } }
+                .onSuccess { s -> host.tell("%.1f seconds cut.".format(s)) }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
+    fun removeFillers(more: Boolean) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { removeFillers(more) } }
+                .onSuccess { n -> host.tell(if (n == 0u) "There are no filler words." else if (n == 1u) "1 filler word removed." else "$n filler words removed.") }
+                .onFailure { host.tell(it.userMessage) }
+            refresh()
+        }
+    }
+
+    fun removePauses(minSeconds: Double) {
+        stop()
+        scope.launch {
+            runCatching { engine.command { removePauses(minSeconds) } }
+                .onSuccess { n -> host.tell(if (n == 0u) "There are no pauses that long." else if (n == 1u) "1 pause removed." else "$n pauses removed.") }
+                .onFailure { host.tell(it.userMessage) }
             refresh()
         }
     }

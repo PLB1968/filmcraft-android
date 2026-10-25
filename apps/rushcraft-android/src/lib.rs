@@ -40,6 +40,7 @@ pub mod samples;
 pub mod speech;
 pub mod starters;
 pub mod text;
+pub mod textedit;
 pub mod titles;
 pub mod tools;
 
@@ -504,6 +505,36 @@ impl MobileSession {
         let id = self.next_job.fetch_add(1, Ordering::Relaxed);
         self.caption_jobs.lock().unwrap_or_else(PoisonError::into_inner).insert(id, job);
         Ok(id)
+    }
+
+    /// Start transcribing the open sequence's sound for Edit by Text (no captions); poll
+    /// [`Self::caption_status`] (its `captions` is then the transcript's word count).
+    pub fn start_transcript(&self, model: String, language: String) -> Result<u64, MobileError> {
+        let job = speech::start_transcript(&self.lock(), &model, &language)?;
+        let id = self.next_job.fetch_add(1, Ordering::Relaxed);
+        self.caption_jobs.lock().unwrap_or_else(PoisonError::into_inner).insert(id, job);
+        Ok(id)
+    }
+
+    /// Edit by Text: the open sequence's transcript.
+    pub fn text_view(&self) -> Result<textedit::TextView, MobileError> {
+        textedit::view(&self.lock())
+    }
+
+    /// Delete these runs of words: the sequence is cut there and closes up (one step); returns
+    /// the seconds removed.
+    pub fn delete_words(&self, ranges: Vec<textedit::WordRange>) -> Result<f64, MobileError> {
+        self.main_edit(|s| textedit::delete_words(s, &ranges))
+    }
+
+    /// Remove every filler word (`more`: also "like", "you know", "so"…); returns how many.
+    pub fn remove_fillers(&self, more: bool) -> Result<u32, MobileError> {
+        self.main_edit(|s| textedit::remove_fillers(s, more))
+    }
+
+    /// Remove pauses longer than `min_seconds`; returns how many.
+    pub fn remove_pauses(&self, min_seconds: f64) -> Result<u32, MobileError> {
+        self.main_edit(|s| textedit::remove_pauses(s, min_seconds))
     }
 
     /// How caption job `job` is doing; when the speech has been heard, this makes the captions.

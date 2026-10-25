@@ -2187,3 +2187,41 @@ fn project_templates_lay_out_titles_and_markers_as_the_first_state() {
     let lower = m.pro_timeline().unwrap().clips.into_iter().find(|c| c.start == 6 * SEC).expect("the lower third");
     assert!(m.title_fields(lower.id).unwrap().iter().any(|f| f.value == "Your Name"));
 }
+
+#[test]
+fn edit_by_text_deletes_words_fillers_and_pauses_and_closes_up() {
+    let (m, _d, _ids) = two_clips();
+    // a transcript of the first clip's sound (2 s): "hello um big world … again"
+    let first = m.project_bin().into_iter().find(|b| b.name.starts_with("a")).expect("a.mp4").id;
+    let w = |t: &str, a: f64, b: f64| serde_json::json!({"text": t, "start": (a * SEC as f64) as i64, "end": (b * SEC as f64) as i64, "speaker": 0});
+    edits::ex(
+        &mut m.lock(),
+        "transcript.set",
+        serde_json::json!({"item": first, "transcript": {"language": "en", "speakers": [{"name": "Pat"}],
+            "words": [w("hello", 0.0, 0.3), w("um", 0.35, 0.5), w("big", 0.55, 0.7), w("world", 0.75, 0.95), w("again", 1.7, 1.9)]}}),
+    )
+    .unwrap();
+    let v = m.text_view().unwrap();
+    assert_eq!(v.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["hello", "um", "big", "world", "again"]);
+    assert!(v.words[1].filler && !v.words[0].filler);
+    assert!(v.untranscribed, "the second clip's sound has no transcript");
+    let len = m.timeline().unwrap().duration;
+    // "big" deleted: the sequence is shorter by about its length, picture and sound together
+    let gone = m.delete_words(vec![textedit::WordRange { from: 2, to: 2 }]).unwrap();
+    assert!(gone > 0.1 && gone < 0.3, "{gone}");
+    let t = m.timeline().unwrap();
+    assert!(t.duration < len);
+    assert!(m.text_view().unwrap().words.iter().all(|w| w.text != "big"));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Delete Words"));
+    // the filler, then the long pause before "again"
+    assert_eq!(m.remove_fillers(false).unwrap(), 1);
+    assert!(m.text_view().unwrap().words.iter().all(|w| w.text != "um"));
+    assert_eq!(m.remove_pauses(0.5).unwrap(), 1);
+    let v = m.text_view().unwrap();
+    let (world, again) = (&v.words[1], &v.words[2]);
+    assert!(again.start - world.end < SEC / 2, "the pause closed up: {world:?} {again:?}");
+    // undo brings the pause back
+    m.undo();
+    let v = m.text_view().unwrap();
+    assert!(v.words[2].start - v.words[1].end > SEC / 2);
+}

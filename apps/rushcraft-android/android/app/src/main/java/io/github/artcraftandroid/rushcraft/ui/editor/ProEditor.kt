@@ -204,6 +204,7 @@ private fun MoreMenu(ed: EditorController) {
                 Triple("Motion…", ed.proSelection.isNotEmpty()) { ed.openMotion() },
                 Triple("Masks & Green Screen…", ed.proSelection.isNotEmpty()) { ed.openMasks() },
                 Triple("Captions…", has) { ed.panel = Panel.Captions },
+                Triple("Edit by Text…", has) { ed.panel = Panel.EditText },
                 Triple("Record with Camera…", true) { ed.openCamera() },
                 Triple("Voice-over…", true) { ed.panel = Panel.Voiceover },
                 Triple("Text to Speech…", true) { ed.panel = Panel.Speech(null) },
