@@ -1358,6 +1358,45 @@ class EditorController(
     var playbackScale by mutableFloatStateOf(1f)
     var safeMargins by mutableStateOf(false)
 
+    // ---- Pro mode: the tool bars (Customise Toolbars) ----
+
+    /** Each bar's buttons as the user set them (app-wide); a bar not here has its built-in set. */
+    private val toolbars = mutableStateMapOf<ToolbarKind, List<String>>().apply {
+        for (k in ToolbarKind.entries) prefs?.toolbar(k.name)?.let { put(k, it) }
+    }
+
+    /** Edit by Text is docked under the timeline (it stays, in every project, until closed). */
+    var textDock by mutableStateOf(prefs?.textDock ?: false)
+        private set
+
+    fun openTextEdit() {
+        if (panel == Panel.EditText) panel = null
+        textDock = true
+        prefs?.textDock = true
+    }
+
+    fun closeTextEdit() {
+        textDock = false
+        prefs?.textDock = false
+    }
+
+    /** The Customise Toolbars dialog is open on this bar. */
+    var customising by mutableStateOf<ToolbarKind?>(null)
+
+    /** [kind]'s buttons in order (ids known to this version only). */
+    fun toolbar(kind: ToolbarKind): List<String> = (toolbars[kind] ?: kind.defaults).filter { kind.knows(it) }
+
+    fun setToolbar(kind: ToolbarKind, ids: List<String>) {
+        toolbars[kind] = ids
+        prefs?.setToolbar(kind.name, ids)
+    }
+
+    /** Put [kind] back to its built-in buttons. */
+    fun resetToolbar(kind: ToolbarKind) {
+        toolbars.remove(kind)
+        prefs?.setToolbar(kind.name, null)
+    }
+
     // started after the state it reads (see renderTrims)
     init {
         scope.launch { renderSource() }

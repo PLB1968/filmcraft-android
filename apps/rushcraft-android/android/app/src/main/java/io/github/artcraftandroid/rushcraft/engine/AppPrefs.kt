@@ -27,10 +27,24 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(AUTO_RENDER, true)
         set(v) = prefs.edit().putBoolean(AUTO_RENDER, v).apply()
 
+    /** Edit by Text stays open under the timeline (closed with its X). */
+    var textDock: Boolean
+        get() = prefs.getBoolean(TEXT_DOCK, false)
+        set(v) = prefs.edit().putBoolean(TEXT_DOCK, v).apply()
+
+    /** A tool bar's buttons in order (Customise Toolbars), or null for the built-in set. */
+    fun toolbar(name: String): List<String>? = prefs.getString(TOOLBAR + name, null)?.split(',')?.filter { it.isNotEmpty() }
+
+    fun setToolbar(name: String, ids: List<String>?) {
+        prefs.edit().apply { if (ids == null) remove(TOOLBAR + name) else putString(TOOLBAR + name, ids.joinToString(",")) }.apply()
+    }
+
     private companion object {
         const val AUTO_PROXIES = "autoProxies"
         const val USE_PROXIES = "useProxies"
         const val HARDWARE_DECODING = "hardwareDecoding"
         const val AUTO_RENDER = "autoRender"
+        const val TOOLBAR = "toolbar."
+        const val TEXT_DOCK = "textDock"
     }
 }
