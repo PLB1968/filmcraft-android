@@ -406,6 +406,40 @@ pub(crate) fn delete_marker(s: &mut Session, marker: u64) -> Result<(), MobileEr
     Ok(())
 }
 
+/// Move a marker to `time` (frame-exact; one undo step).
+pub(crate) fn move_marker(s: &mut Session, marker: u64, time: i64) -> Result<(), MobileError> {
+    let id = MarkerId(marker);
+    let (_, seq) = model::sequence(s)?;
+    if !seq.markers.iter().any(|m| m.id == id) {
+        return Err(MobileError::Command("That marker is gone.".into()));
+    }
+    let at = s.sequence_rate().snap_nearest(Tick(time.max(0)));
+    s.edit_sequence("Move Marker", |q, _, _| {
+        if let Some(m) = q.markers.iter_mut().find(|m| m.id == id) {
+            m.start = at;
+        }
+        q.markers.sort_by_key(|m| m.start);
+        Ok(())
+    })?;
+    settle(s);
+    Ok(())
+}
+
+/// Delete every sequence marker (one undo step); returns how many went.
+pub(crate) fn delete_all_markers(s: &mut Session) -> Result<u32, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let n = u32::try_from(seq.markers.len()).unwrap_or(u32::MAX);
+    if n == 0 {
+        return Ok(0);
+    }
+    s.edit_sequence("Clear All Markers", |q, _, _| {
+        q.markers.clear();
+        Ok(())
+    })?;
+    settle(s);
+    Ok(n)
+}
+
 /// Move the playhead to the next (or previous) marker; returns where it is.
 pub(crate) fn go_to_marker(s: &mut Session, next: bool) -> Result<i64, MobileError> {
     ex(s, if next { "markers.goNext" } else { "markers.goPrev" }, json!({}))?;
@@ -435,6 +469,23 @@ pub(crate) fn move_clip(s: &mut Session, clip: u64, track: u64, start: i64) -> R
         return Err(MobileError::Command(format!("{} is locked.", to.name)));
     }
     ex(s, "timeline.move", json!({"moves": [{"clip": clip, "track": track, "time": Tick(start.max(0)).0}], "insert": false}))?;
+    Ok(())
+}
+
+/// Move clip `clip` to `start` on a new track of its kind, added above the top video track (a
+/// picture) or below the last audio track (a sound): a clip dragged past the outermost track.
+/// One undo step.
+pub(crate) fn move_clip_to_new_track(s: &mut Session, clip: u64, start: i64) -> Result<(), MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let f = model::find(seq, ClipId(clip)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?;
+    let video = f.kind == TrackKind::Video;
+    s.edit_group("Move Clip to New Track", |s| {
+        s.execute("sequence.addTracks", json!({"video": u32::from(video), "audio": u32::from(!video), "videoAfter": "last", "audioAfter": "last"}))?;
+        // the track just added: the last of its kind
+        let track = s.active_sequence().and_then(|q| if video { q.video_tracks.last() } else { q.audio_tracks.last() }).map(|t| t.id.0);
+        s.execute("timeline.move", json!({"moves": [{"clip": clip, "track": track, "time": start.max(0)}], "insert": false}))?;
+        Ok(())
+    })?;
     Ok(())
 }
 

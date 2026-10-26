@@ -1515,6 +1515,42 @@ fn the_stopwatch_keyframes_interpolate_and_show_on_the_clip() {
 }
 
 #[test]
+fn markers_move_and_all_clear_in_one_step_each() {
+    let (m, _d, _ids) = two_clips();
+    let a = m.add_marker(SEC / 2, "a".into()).unwrap();
+    m.add_marker(SEC, "b".into()).unwrap();
+    m.move_marker(a, 3 * SEC / 2).unwrap();
+    let ms = m.pro_timeline().unwrap().markers;
+    assert_eq!(ms.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["b", "a"], "in time order");
+    assert_eq!(ms[1].start, 3 * SEC / 2);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Move Marker"));
+    assert_eq!(m.delete_all_markers().unwrap(), 2);
+    assert!(m.pro_timeline().unwrap().markers.is_empty());
+    m.undo();
+    assert_eq!(m.pro_timeline().unwrap().markers.len(), 2, "one undo step");
+    assert!(matches!(m.move_marker(999_999, 0), Err(MobileError::Command(_))));
+}
+
+#[test]
+fn a_clip_dragged_past_the_outermost_track_gets_a_new_track_in_one_step() {
+    let (m, _d, ids) = two_clips();
+    let t = m.pro_timeline().unwrap();
+    let (nv, na) = (t.video_tracks.len(), t.audio_tracks.len());
+    m.pro_move_to_new_track(ids[0], SEC).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.video_tracks.len(), nv + 1);
+    assert_eq!(t.audio_tracks.len(), na, "a picture gets a video track");
+    let top = t.video_tracks.last().unwrap().id;
+    let c = pclip(&m, ids[0]);
+    assert_eq!((c.track, c.start), (top, SEC));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Move Clip to New Track"));
+    m.undo();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.video_tracks.len(), nv, "one undo step takes the track away too");
+    assert_eq!(pclip(&m, ids[0]).start, 0);
+}
+
+#[test]
 fn a_project_item_dragged_onto_the_timeline_lands_at_its_source_in_to_out() {
     let (m, _d, _ids) = two_clips();
     m.add_tracks(1, 0).unwrap();

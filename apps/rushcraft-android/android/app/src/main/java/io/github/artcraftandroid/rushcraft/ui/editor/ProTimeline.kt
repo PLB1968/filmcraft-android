@@ -36,6 +36,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -96,6 +98,7 @@ import io.github.artcraftandroid.rushcraft.ui.LucideIcons
 import io.github.artcraftandroid.rushcraft.ui.glyph
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -153,7 +156,6 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
     val haptic = LocalHapticFeedback.current
     var menu by remember { mutableStateOf<ProMenu?>(null) }
     var renaming by remember { mutableStateOf<ProTrack?>(null) }
-    var editingMarker by remember { mutableStateOf<ProMarker?>(null) }
     // the tracks' vertical scroll (px)
     var vScroll by remember { mutableFloatStateOf(0f) }
     val header = if (compact) 132.dp else 216.dp
@@ -233,7 +235,7 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                                 val near = with(density) { 16.dp.toPx() }
                                 val m = p.markers.minByOrNull { abs(xOf(it.start) - at.x) }?.takeIf { abs(xOf(it.start) - at.x) < near }
                                 if (m != null) {
-                                    editingMarker = m
+                                    ed.markerEditing = m.id
                                 } else {
                                     // a double tap on the ruler: zoom to the selected clips (else the whole sequence)
                                     val sel = p.clips.filter { it.selected }
@@ -243,6 +245,17 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                                     ed.proPxPerSecond = np
                                     setScroll(a - (viewport * 0.1f / np * TPS).roundToLong())
                                 }
+                            },
+                            onMarkerMenu = { at, m ->
+                                menu = ProMenu(
+                                    at + Offset(headerPx, touchPx),
+                                    listOf(
+                                        "Edit Marker…" to { ed.markerEditing = m.id },
+                                        "Go to Marker" to { ed.seek(m.start, draft = false) },
+                                        "Delete Marker" to { ed.deleteMarker(m.id) },
+                                        "Markers…" to { ed.panel = Panel.Markers },
+                                    ),
+                                )
                             },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
@@ -346,7 +359,6 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
             if (name != null) ed.setTrack(t.id, TrackSwitches(name = name))
         }
     }
-    editingMarker?.let { m -> MarkerDialog(ed, m) { editingMarker = null } }
 }
 
 private fun inOutLabel(p: ProTimeline): String {
@@ -394,11 +406,17 @@ private fun Ruler(
     xOf: (Long) -> Float,
     tOf: (Float) -> Long,
     onMarker: (Offset) -> Unit,
+    onMarkerMenu: (Offset, ProMarker) -> Unit,
     modifier: Modifier,
 ) {
     val measurer = rememberTextMeasurer()
     val tAt by rememberUpdatedState(tOf)
+    val xAt by rememberUpdatedState(xOf)
+    val pNow by rememberUpdatedState(p)
     val markerAt by rememberUpdatedState(onMarker)
+    val markerMenuAt by rememberUpdatedState(onMarkerMenu)
+    // a marker being dragged along the ruler, and where it would go
+    var markerDrag by remember { mutableStateOf<Pair<ULong, Long>?>(null) }
     // the last tap (time, place), for a double tap on a marker
     var lastTap by remember { mutableStateOf<Pair<Long, Offset>?>(null) }
     val haptic = LocalHapticFeedback.current
@@ -421,6 +439,64 @@ private fun Ruler(
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     val double = lastTap?.let { (t, at) -> down.uptimeMillis - t < viewConfiguration.doubleTapTimeoutMillis && (at - down.position).getDistance() < 24.dp.toPx() } == true
+                    // a marker's flag (the ruler's upper part): a tap goes to it (a double tap edits
+                    // it), a long press opens its menu, a drag moves it
+                    val grab = if (down.position.y < size.height * 0.6f) {
+                        pNow.markers.minByOrNull { abs(xAt(it.start) - down.position.x) }?.takeIf { abs(xAt(it.start) - down.position.x) < 14.dp.toPx() }
+                    } else {
+                        null
+                    }
+                    if (grab != null) {
+                        val r = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                            var r = "up"
+                            while (true) {
+                                val c = awaitPointerEvent().changes.firstOrNull() ?: break
+                                if (!c.pressed) break
+                                if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                                    r = "moved"
+                                    break
+                                }
+                            }
+                            r
+                        }
+                        when (r) {
+                            "up" -> if (double) {
+                                lastTap = null
+                                markerAt(down.position)
+                            } else {
+                                lastTap = down.uptimeMillis to down.position
+                                ed.seek(grab.start, draft = false)
+                            }
+                            null -> {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                markerMenuAt(down.position, grab)
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    ev.changes.forEach { it.consume() }
+                                    if (ev.changes.none { it.pressed }) break
+                                }
+                            }
+                            else -> {
+                                val reach = 10.dp.toPx()
+                                markerDrag = grab.id to grab.start
+                                while (true) {
+                                    val c = awaitPointerEvent().changes.firstOrNull() ?: break
+                                    if (!c.pressed) break
+                                    c.consume()
+                                    val t = TimelineMath.snap(tAt(c.position.x), pNow.rateNum, pNow.rateDen).coerceAtLeast(0L)
+                                    val snap = ed.snapPlayhead(t, (tAt(c.position.x + reach) - tAt(c.position.x)).coerceAtLeast(0L))?.takeIf { it != grab.start }
+                                    if (snap != null && snap != ed.playheadSnap) haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    ed.playheadSnap = snap
+                                    markerDrag = grab.id to (snap ?: t)
+                                }
+                                val to = markerDrag?.second
+                                markerDrag = null
+                                ed.playheadSnap = null
+                                if (to != null && to != grab.start) ed.moveMarker(grab.id, to)
+                            }
+                        }
+                        return@awaitEachGesture
+                    }
                     if (double) {
                         lastTap = null
                         markerAt(down.position)
@@ -472,7 +548,11 @@ private fun Ruler(
             }
             t += step.ticks
         }
-        for (m in p.markers) drawMarker(xOf(m.start), xOf(m.start + m.duration), markerColor(m.color))
+        for (m in p.markers) {
+            // the one being dragged is drawn where it would go
+            val at = markerDrag?.takeIf { it.first == m.id }?.second ?: m.start
+            drawMarker(xOf(at), xOf(at + m.duration), markerColor(m.color))
+        }
         // the playhead's head
         val px = xOf(ed.playhead)
         val head = Path().apply {
@@ -1004,6 +1084,12 @@ private fun Tracks(
     val edgeZone = with(density) { 18.dp.toPx() }
 
     fun rowAt(rows: List<ProRow>, y: Float) = rows.firstOrNull { y >= it.top && y < it.bottom }
+
+    /** A picture dragged above the top track, or a sound below the last: it goes on a new track. */
+    fun wantsNewTrack(rows: List<ProRow>, c: ProClip, y: Float): Boolean {
+        val video = rows.firstOrNull { it.track.id == c.track }?.track?.video ?: return false
+        return if (video) y < (rows.firstOrNull()?.top ?: 0f) else y > (rows.lastOrNull()?.bottom ?: Float.MAX_VALUE)
+    }
     fun frameAt(x: Float): Long = TimelineMath.snap(tAt(x), pNow.rateNum, pNow.rateDen)
 
     /** A drag on [c]'s volume line (or one of its keyframes) beginning at [x], [y]; null when not on it. */
@@ -1072,6 +1158,11 @@ private fun Tracks(
             val from = (p.videoTracks + p.audioTracks).firstOrNull { it.id == c.track }
             val to = rowAt(rowsNow, y)?.track?.takeIf { from != null && it.video == from.video } ?: from
             val start = landing(p, ed.playhead, c, dx, ppsNow(), snapReach)
+            if (wantsNewTrack(rowsNow, c, y)) {
+                haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                ed.proMoveToNewTrack(c.id, start)
+                return
+            }
             if (to != null && (start != c.start || to.id != c.track)) ed.proMove(c.id, to.id, start)
             return
         }
@@ -1117,6 +1208,42 @@ private fun Tracks(
         onDispose { if (ed.dropProbe != null) ed.dropProbe = null }
     }
     val incoming = ed.mediaDrag?.let { m -> dropAt(m.at)?.let { m to it } }
+
+    // a drag held near the left or right edge scrolls the timeline (faster nearer the edge); a
+    // dragged clip stays under the finger as it does
+    var fingerX by remember { mutableFloatStateOf(0f) }
+    var fingerY by remember { mutableFloatStateOf(0f) }
+    val scrolling = drag?.kind?.let { it != DragKind.Volume && it != DragKind.Slip } == true
+    LaunchedEffect(scrolling, incoming != null) {
+        if (!scrolling && incoming == null) return@LaunchedEffect
+        val zone = with(density) { 40.dp.toPx() }
+        val fastest = with(density) { 14.dp.toPx() }
+        while (true) {
+            withFrameNanos {}
+            val c = here.coords?.takeIf { it.isAttached } ?: break
+            val w = c.size.width.toFloat()
+            val x = if (drag != null) fingerX else ed.mediaDrag?.let { c.windowToLocal(it.at).x } ?: break
+            val push = when {
+                x < zone -> -(1f - x / zone)
+                x > w - zone -> 1f - (w - x) / zone
+                else -> 0f
+            }.coerceIn(-1f, 1f)
+            // a clip moved toward the top or bottom edge scrolls the tracks up or down too
+            val h = c.size.height.toFloat()
+            val pushY = if (drag?.kind != DragKind.Move) 0f else when {
+                fingerY < zone -> -(1f - fingerY / zone)
+                fingerY > h - zone -> 1f - (h - fingerY) / zone
+                else -> 0f
+            }.coerceIn(-1f, 1f)
+            if (push == 0f && pushY == 0f) continue
+            val before = ed.proScroll
+            pan(-push * fastest, -pushY * fastest)
+            if (drag != null) {
+                dragDx += (ed.proScroll - before).toFloat() / TPS * ppsNow()
+                dragY = fingerY + vNow()
+            }
+        }
+    }
 
     // the picked end's frames in the Program monitor (a drag shows its own)
     val picked = ed.pickedEdge
@@ -1309,6 +1436,8 @@ private fun Tracks(
                             var lastSnap: Long? = null
                             if (d != null) {
                                 drag = d
+                                fingerX = x
+                                fingerY = down.position.y
                                 dragDx = 0f
                                 dragY = stackY
                                 dragY0 = stackY
@@ -1345,6 +1474,8 @@ private fun Tracks(
                                 } else if (drag != null) {
                                     val c = pressed.first()
                                     dragDx += c.positionChange().x
+                                    fingerX = c.position.x
+                                    fingerY = c.position.y
                                     dragY = c.position.y + vNow()
                                     val dr = drag
                                     if (dr != null) ed.showTrim(dragView(pNow, dr, dragDelta(pNow, ed.playhead, dr, dragDx, ppsNow(), snapReach)))
@@ -1379,7 +1510,9 @@ private fun Tracks(
         val snapLine = dr?.let { snapPoint(p, ed.playhead, it, dragDx, pps(), snapReach) }
         // where a moved or dropped clip would land: its row lit, its start marked with its time
         val moving = dr?.takeIf { it.kind == DragKind.Move }
+        val newTrack = moving != null && wantsNewTrack(rows, moving.clip, dragY)
         val landRow = when {
+            newTrack -> null
             moving != null -> moveTarget ?: rows.firstOrNull { it.track.id == moving.clip.track }
             incoming != null -> rows.firstOrNull { it.track.id == incoming.second.track }
             else -> null
@@ -1516,6 +1649,15 @@ private fun Tracks(
             val sx = xOf(st)
             drawLine(Color(0xFFFFD54F), Offset(sx, 0f), Offset(sx, size.height), 1.5.dp.toPx())
         }
+        // past the outermost track: a band where the new track will be
+        if (newTrack && moving != null) {
+            val video = rows.firstOrNull { it.track.id == moving.clip.track }?.track?.video == true
+            val bandH = 28.dp.toPx()
+            val y0 = if (video) 0f else min(size.height - bandH, (rows.lastOrNull()?.bottom ?: 0f) - v)
+            drawRect(Fc.Accent.copy(alpha = 0.45f), Offset(0f, y0), Size(w, bandH))
+            val label = measurer.measure(if (video) "+ New video track" else "+ New audio track", TextStyle(fontFamily = Inter, fontSize = 12.sp, color = Color.White))
+            drawText(label, topLeft = Offset(8.dp.toPx(), y0 + (bandH - label.size.height) / 2))
+        }
         // the landing time, on a pill at the top of the line where the clip would start
         if (landAt != null) {
             val lx = xOf(landAt)
@@ -1639,8 +1781,9 @@ private fun DrawScope.drawClip(
             if (x >= x0 && x <= x1) drawKeyframe(Offset(x, y), "linear", Color.White.copy(alpha = alpha), radius = 3.5.dp.toPx())
         }
     }
-    // the name sits at the clip's head and scrolls with it
-    val left = x0 + 4.dp.toPx()
+    // the name sits at the clip's head, and stays in view at the timeline's left edge while the
+    // head is scrolled off it
+    val left = max(x0, 0f) + 4.dp.toPx()
     val room = (x1 - left - 4.dp.toPx()).toInt()
     if (room > 12.dp.toPx() && h > 14.dp.toPx()) {
         drawText(
@@ -1682,7 +1825,7 @@ private fun DialogField(value: String, onChange: (String) -> Unit, tag: String, 
 
 /** Edit a marker: name, comment, colour; or delete it. */
 @Composable
-private fun MarkerDialog(ed: EditorController, m: ProMarker, onClose: () -> Unit) {
+internal fun MarkerDialog(ed: EditorController, m: ProMarker, onClose: () -> Unit) {
     var name by remember(m.id) { mutableStateOf(m.name) }
     var comment by remember(m.id) { mutableStateOf(m.comment) }
     var color by remember(m.id) { mutableStateOf(m.color) }

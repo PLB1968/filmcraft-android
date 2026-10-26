@@ -131,6 +131,8 @@ sealed interface Panel {
     data object Masks : Panel
     /** Pro mode: Edit by Text, the sequence's transcript. */
     data object EditText : Panel
+    /** Pro mode: the sequence's markers, to go to, edit or delete. */
+    data object Markers : Panel
 }
 
 /** The tool bar's submenus. */
@@ -1183,6 +1185,8 @@ class EditorController(
     }
 
     fun proMove(clip: ULong, track: ULong, start: Long) = edit { proMoveClip(clip, track, start) }
+    /** Move a clip to [start] on a new track of its kind (dragged past the top or bottom track). */
+    fun proMoveToNewTrack(clip: ULong, start: Long) = edit { proMoveToNewTrack(clip, start) }
     fun deleteSelection(ripple: Boolean) = edit { deleteSelection(ripple) }
 
     fun addTracks(video: Int, audio: Int) = edit { addTracks(video.toUInt(), audio.toUInt()) }
@@ -1204,6 +1208,15 @@ class EditorController(
     fun addMarker(at: Long = playhead) = edit { addMarker(at, "") }
     fun editMarker(id: ULong, name: String, comment: String, color: String) = edit { editMarker(id, name, comment, color) }
     fun deleteMarker(id: ULong) = edit { deleteMarker(id) }
+    fun moveMarker(id: ULong, to: Long) = edit { moveMarker(id, to) }
+    fun deleteAllMarkers() = edit { deleteAllMarkers() }
+
+    /** The marker whose editor is open (name, comment, colour, Delete), else null. */
+    var markerEditing by mutableStateOf<ULong?>(null)
+
+    /** The marker at the playhead (within half a frame), else null. */
+    val markerAtPlayhead: io.github.artcraftandroid.rushcraft.core.ProMarker?
+        get() = pro?.markers?.firstOrNull { kotlin.math.abs(it.start - playhead) * 2 < frameTicks }
 
     fun goToMarker(next: Boolean) {
         stop()

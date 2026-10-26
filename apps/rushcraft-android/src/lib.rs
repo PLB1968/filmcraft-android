@@ -786,6 +786,16 @@ impl MobileSession {
         pro::delete_marker(&mut self.lock(), marker)
     }
 
+    /// Move a marker to `time` (dragged along the ruler).
+    pub fn move_marker(&self, marker: u64, time: i64) -> Result<(), MobileError> {
+        pro::move_marker(&mut self.lock(), marker, time)
+    }
+
+    /// Delete every marker; returns how many.
+    pub fn delete_all_markers(&self) -> Result<u32, MobileError> {
+        pro::delete_all_markers(&mut self.lock())
+    }
+
     /// Go to the next (or previous) marker; returns the playhead.
     pub fn go_to_marker(&self, next: bool) -> Result<i64, MobileError> {
         pro::go_to_marker(&mut self.lock(), next)
@@ -800,6 +810,11 @@ impl MobileSession {
     /// Move a clip to `start` on `track`, overwriting what is there (linked partners follow).
     pub fn pro_move_clip(&self, clip: u64, track: u64, start: i64) -> Result<(), MobileError> {
         self.pro_edit(|s| pro::move_clip(s, clip, track, start))
+    }
+
+    /// Move a clip to `start` on a new track of its kind (dragged past the outermost track).
+    pub fn pro_move_to_new_track(&self, clip: u64, start: i64) -> Result<(), MobileError> {
+        self.pro_edit(|s| pro::move_clip_to_new_track(s, clip, start))
     }
 
     /// Delete the selected clips; `ripple` closes the gap they leave.
