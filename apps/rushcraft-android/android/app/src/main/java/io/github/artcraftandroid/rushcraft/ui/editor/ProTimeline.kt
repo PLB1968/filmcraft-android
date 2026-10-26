@@ -35,6 +35,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -47,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -360,13 +362,13 @@ private fun inOutLabel(p: ProTimeline): String {
 
 /**
  * The bar over the timeline: the playhead's timecode, then the buttons the user keeps there
- * (Snap, Linked Selection, Add Marker, Add Tracks, zoom and In/Out to begin with). Icons share
- * the width, so the bar fits a phone held upright; with text buttons or many, it scrolls.
+ * (Snap, Linked Selection, Add Marker, Add Tracks, zoom and In/Out to begin with), on one line
+ * ([CommandSlots]).
  */
 @Composable
 private fun TimelineBar(ed: EditorController, compact: Boolean) {
     Row(
-        Modifier.fillMaxWidth().height(Touch).background(Fc.Panel).customiseOnHold(ed, ToolbarKind.Timeline).padding(horizontal = 6.dp),
+        Modifier.fillMaxWidth().height(BarHeight).background(Fc.Panel).customiseOnHold(ed, ToolbarKind.Timeline).padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -380,17 +382,7 @@ private fun TimelineBar(ed: EditorController, compact: Boolean) {
         if (!compact) {
             Text("${ed.proTool.label} (${ed.proTool.key})", style = FcType.Caption, color = Fc.Secondary, maxLines = 1, modifier = Modifier.padding(end = 8.dp).testTag("pro_tool_name"))
         }
-        val ids = ed.toolbar(ToolbarKind.Timeline)
-        val cmds = ids.mapNotNull { BarCommands.of(it) }
-        if (cmds.all { it.glyph != null } && cmds.size <= 9) {
-            // icons share the bar's length (each at most a touch target), so they all fit without scrolling
-            val slot = Modifier.weight(1f).widthIn(max = Touch).fillMaxHeight()
-            for (c in cmds) BarCommandButton(ed, c, ToolbarKind.Timeline, slot, size = Touch)
-        } else {
-            Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-                for (c in cmds) BarCommandButton(ed, c, ToolbarKind.Timeline, size = Touch)
-            }
-        }
+        CommandSlots(ed, ToolbarKind.Timeline, ed.toolbar(ToolbarKind.Timeline))
     }
 }
 
@@ -409,6 +401,17 @@ private fun Ruler(
     val markerAt by rememberUpdatedState(onMarker)
     // the last tap (time, place), for a double tap on a marker
     var lastTap by remember { mutableStateOf<Pair<Long, Offset>?>(null) }
+    val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    // with Snap on, the playhead sticks to an edit point within 10 dp, with a tick and the yellow line
+    fun seekSnapped(x: Float) {
+        val t = tAt(x)
+        val reach = with(density) { 10.dp.toPx() }
+        val snap = ed.snapPlayhead(t, (tAt(x + reach) - t).coerceAtLeast(0L))
+        if (snap != null && snap != ed.playheadSnap) haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        ed.playheadSnap = snap
+        ed.seek(snap ?: t)
+    }
     Canvas(
         modifier
             .background(Fc.Panel)
@@ -422,7 +425,7 @@ private fun Ruler(
                         lastTap = null
                         markerAt(down.position)
                     } else {
-                        ed.seek(tAt(down.position.x))
+                        seekSnapped(down.position.x)
                     }
                     var moved = false
                     while (true) {
@@ -431,10 +434,11 @@ private fun Ruler(
                         if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
                         if (moved) {
                             c.consume()
-                            ed.seek(tAt(c.position.x))
+                            seekSnapped(c.position.x)
                         }
                     }
                     if (!double) lastTap = if (moved) null else down.uptimeMillis to down.position
+                    ed.playheadSnap = null
                     ed.settle()
                 }
             }
@@ -1096,6 +1100,24 @@ private fun Tracks(
         }
     }
 
+    // a drop from the Project panel or the Source monitor: the track and time under a window point
+    val here = remember { CoordsHolder() }
+    fun dropAt(window: Offset): DropSpot? {
+        val c = here.coords?.takeIf { it.isAttached } ?: return null
+        val local = c.windowToLocal(window)
+        if (local.x < 0f || local.y < 0f || local.x > c.size.width || local.y > c.size.height) return null
+        val row = rowAt(rowsNow, local.y + vNow()) ?: return null
+        if (row.track.locked) return null
+        val t = frameAt(local.x).coerceAtLeast(0L)
+        val reach = (tAt(local.x + snapReach) - tAt(local.x)).coerceAtLeast(0L)
+        return DropSpot(row.track.id, ed.snapPlayhead(t, reach) ?: t)
+    }
+    DisposableEffect(Unit) {
+        ed.dropProbe = ::dropAt
+        onDispose { if (ed.dropProbe != null) ed.dropProbe = null }
+    }
+    val incoming = ed.mediaDrag?.let { m -> dropAt(m.at)?.let { m to it } }
+
     // the picked end's frames in the Program monitor (a drag shows its own)
     val picked = ed.pickedEdge
     if (drag == null) {
@@ -1110,6 +1132,7 @@ private fun Tracks(
         modifier
             .background(Fc.Black)
             .clipToBounds()
+            .onGloballyPositioned { here.coords = it }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
@@ -1145,10 +1168,30 @@ private fun Tracks(
                     val x = down.position.x
                     // a tap or a long press on the tracks stops playback (scrolling and zooming don't)
                     if (result != "moved") ed.stop()
-                    when (result) {
+                    // a long press on a clip (Selection tool) picks it up: a drag then moves it, any
+                    // clip, selected or not; let go without moving for its menu
+                    var pickup: ToolDrag? = null
+                    var released = false
+                    if (result == null && ed.proTool == ProTool.Selection && hit != null && hitRow != null && !hitRow.track.locked) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val c = ev.changes.firstOrNull() ?: break
+                            if (!c.pressed) {
+                                released = true
+                                break
+                            }
+                            if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                                if (!hit.selected) ed.proSelect(hit.id)
+                                pickup = ToolDrag(DragKind.Move, hit, false)
+                                break
+                            }
+                        }
+                    }
+                    when (if (pickup != null) "moved" else result) {
                         // a long press: the context menu, or the tool's second action
                         null -> {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (!released) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             when (ed.proTool) {
                                 ProTool.Zoom -> zoom(0.5f, x)
                                 ProTool.Razor -> ed.proRazor(ed.playhead, null, null)
@@ -1176,7 +1219,7 @@ private fun Tracks(
                                     }
                                 }
                             }
-                            while (true) {
+                            while (!released) {
                                 val ev = awaitPointerEvent()
                                 ev.changes.forEach { it.consume() }
                                 if (ev.changes.none { it.pressed }) break
@@ -1262,7 +1305,7 @@ private fun Tracks(
                                 }
                                 return@awaitEachGesture
                             }
-                            val d = if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
+                            val d = pickup ?: if (!multi && hit != null && hitRow != null) startDrag(p0, hit, hitRow, x, stackY) else null
                             var lastSnap: Long? = null
                             if (d != null) {
                                 drag = d
@@ -1334,11 +1377,33 @@ private fun Tracks(
         val moveShift = dr?.takeIf { it.kind == DragKind.Move }?.let { landing(p, ed.playhead, it.clip, dragDx, pps(), snapReach) - it.clip.start } ?: 0L
         // where a drag has snapped: a yellow line down the timeline
         val snapLine = dr?.let { snapPoint(p, ed.playhead, it, dragDx, pps(), snapReach) }
+        // where a moved or dropped clip would land: its row lit, its start marked with its time
+        val moving = dr?.takeIf { it.kind == DragKind.Move }
+        val landRow = when {
+            moving != null -> moveTarget ?: rows.firstOrNull { it.track.id == moving.clip.track }
+            incoming != null -> rows.firstOrNull { it.track.id == incoming.second.track }
+            else -> null
+        }
+        val landAt = when {
+            moving != null -> moving.clip.start + moveShift
+            incoming != null -> incoming.second.time
+            else -> null
+        }
         translate(0f, -v) {
             // lanes
             for (r in rows) {
                 drawRect(if (r.track.targeted) Color(0xFF151820) else Fc.Lane, Offset(0f, r.top), Size(w, r.height))
+                if (r == landRow) drawRect(Fc.Accent.copy(alpha = 0.18f), Offset(0f, r.top), Size(w, r.height))
                 drawLine(Fc.Hairline, Offset(0f, r.bottom), Offset(w, r.bottom), 1f)
+            }
+            // media on its way in: where it would land
+            if (incoming != null && landRow != null) {
+                val x0 = xOf(incoming.second.time)
+                val x1 = xOf(incoming.second.time + incoming.first.duration)
+                val top = landRow.top + 2.dp.toPx()
+                val hgt = landRow.height - 4.dp.toPx()
+                drawRect(Fc.Accent.copy(alpha = 0.55f), Offset(x0, top), Size(max(4f, x1 - x0), hgt))
+                drawRect(Color.White, Offset(x0, top), Size(max(4f, x1 - x0), hgt), style = Stroke(2.dp.toPx()))
             }
             val rowOf = rows.associateBy { it.track.id }
             val labelStyle = TextStyle(fontFamily = Inter, fontSize = 11.sp)
@@ -1447,9 +1512,19 @@ private fun Tracks(
             drawRect(color, Offset(x0, 0f), Size(max(1f, x1 - x0), barH))
         }
         // a drag snapped here
-        snapLine?.let { st ->
+        (snapLine ?: ed.playheadSnap)?.let { st ->
             val sx = xOf(st)
             drawLine(Color(0xFFFFD54F), Offset(sx, 0f), Offset(sx, size.height), 1.5.dp.toPx())
+        }
+        // the landing time, on a pill at the top of the line where the clip would start
+        if (landAt != null) {
+            val lx = xOf(landAt)
+            drawLine(Color.White.copy(alpha = 0.8f), Offset(lx, 0f), Offset(lx, size.height), 1.dp.toPx())
+            val label = measurer.measure(TimelineMath.timecode(landAt, p.rateNum, p.rateDen), TextStyle(fontFamily = Inter, fontSize = 11.sp, color = Color.Black, fontFeatureSettings = "tnum"))
+            val pad = 4.dp.toPx()
+            val bx = (lx + pad).coerceAtMost(w - label.size.width - pad * 2)
+            drawRoundRect(Color.White, Offset(bx, pad), Size(label.size.width + pad * 2, label.size.height + pad), androidx.compose.ui.geometry.CornerRadius(pad, pad))
+            drawText(label, topLeft = Offset(bx + pad, pad * 1.5f))
         }
         // the playhead
         val px = xOf(ed.playhead)

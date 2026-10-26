@@ -586,6 +586,72 @@ class EditorController(
         scope.launch { engine.command { setPlayhead(c) } }
     }
 
+    // ---- dragging media onto the timeline ----
+
+    /** Media on its way from the Project panel or the Source monitor to the timeline, else null. */
+    var mediaDrag by mutableStateOf<MediaDrag?>(null)
+        private set
+
+    /** The timeline's answer to where a drop at a window point lands (set by the timeline while shown). */
+    var dropProbe: ((androidx.compose.ui.geometry.Offset) -> DropSpot?)? = null
+
+    fun startMediaDrag(d: MediaDrag) {
+        stop()
+        mediaDrag = d
+        // a phone upright: the timeline comes up to drop on
+        if (!proDesktop) proTab = 0
+    }
+
+    fun moveMediaDrag(at: androidx.compose.ui.geometry.Offset) {
+        mediaDrag = mediaDrag?.copy(at = at)
+    }
+
+    /** The finger lifted: the media goes where it is over the timeline (nowhere, off it). */
+    fun dropMedia() {
+        val d = mediaDrag ?: return
+        mediaDrag = null
+        val spot = dropProbe?.invoke(d.at) ?: return
+        edit { placeItem(d.item, spot.track, spot.time) }
+    }
+
+    /** What dragging project item [item] would carry: its Source In to Out when it's in the Source monitor. */
+    fun mediaDragOf(item: ULong, label: String, duration: Long): MediaDrag {
+        val s = source?.takeIf { it.item == item }
+        val len = if (s != null && (s.markIn != null || s.markOut != null)) (s.markOut ?: s.end) - (s.markIn ?: s.start) else duration
+        // a still has no length of its own: it lands at five seconds
+        return MediaDrag(item, label, if (len > 0L) len else 5L * TPS, androidx.compose.ui.geometry.Offset.Zero)
+    }
+
+    /** Where a dragged playhead has snapped (with Snap on), for the timeline's yellow line; else null. */
+    var playheadSnap by mutableStateOf<Long?>(null)
+
+    /**
+     * With Snap on, the edit point a playhead dragged to [t] sticks to: a clip's start or end, a
+     * marker, In/Out or a keyframe of the clip in Effect Controls, the nearest within [reach]
+     * ticks; else null.
+     */
+    fun snapPlayhead(t: Long, reach: Long): Long? {
+        val p = pro ?: return null
+        if (!p.snapping) return null
+        val points = buildList {
+            add(0L)
+            p.markIn?.let(::add)
+            p.markOut?.let(::add)
+            for (m in p.markers) {
+                add(m.start)
+                if (m.duration > 0L) add(m.start + m.duration)
+            }
+            for (c in p.clips) {
+                add(c.start)
+                add(c.start + c.duration)
+            }
+            if (effectsClip != null && p.clips.any { it.id == effectsClip && it.selected }) {
+                for (e in effects) for (q in e.params) for (k in q.keyframes) add(k.time)
+            }
+        }
+        return points.minByOrNull { kotlin.math.abs(it - t) }?.takeIf { kotlin.math.abs(it - t) <= reach }
+    }
+
     /** The finger left the timeline: draw the frame at full quality. */
     fun settle() {
         requestFrame(playhead, draft = false)

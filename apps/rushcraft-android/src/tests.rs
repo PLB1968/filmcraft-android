@@ -1515,6 +1515,27 @@ fn the_stopwatch_keyframes_interpolate_and_show_on_the_clip() {
 }
 
 #[test]
+fn a_project_item_dragged_onto_the_timeline_lands_at_its_source_in_to_out() {
+    let (m, _d, _ids) = two_clips();
+    m.add_tracks(1, 0).unwrap();
+    let v2 = m.pro_timeline().unwrap().video_tracks[1].id;
+    let item = m.project_bin().into_iter().find(|b| b.name.starts_with("a")).expect("a.mp4").id;
+    // its Source In to Out: half a second from a quarter in
+    m.open_source(item).unwrap();
+    m.set_source_mark(true, Some(SEC / 4)).unwrap();
+    m.set_source_mark(false, Some(SEC * 3 / 4)).unwrap();
+    let new = m.place_item(item, v2, 2 * SEC).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let c = t.clips.iter().find(|c| new.contains(&c.id) && c.track == v2).expect("the picture on V2");
+    assert_eq!(c.start, 2 * SEC);
+    assert!((c.duration - SEC / 2).abs() < SEC / 10, "In to Out: {}", c.duration);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Place Clip"));
+    m.undo();
+    assert!(m.pro_timeline().unwrap().clips.iter().all(|c| c.track != v2), "one undo step");
+    assert!(matches!(m.place_item(999_999, v2, 0), Err(MobileError::Command(_))));
+}
+
+#[test]
 fn media_dropped_on_a_double_tapped_spot_overwrites_there_as_one_step() {
     let (m, d, ids) = two_clips();
     m.add_tracks(1, 1).unwrap();
