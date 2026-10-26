@@ -1295,11 +1295,12 @@ private fun Tracks(
                     val x = down.position.x
                     // a tap or a long press on the tracks stops playback (scrolling and zooming don't)
                     if (result != "moved") ed.stop()
-                    // a long press on a clip (Selection tool) picks it up: a drag then moves it, any
-                    // clip, selected or not; let go without moving for its menu
+                    // a long press on a clip picks it up, whatever the tool: a drag then moves it, any
+                    // clip, selected or not; let go without moving for the menu (or the tool's own
+                    // long press: Zoom out, Razor through every track…)
                     var pickup: ToolDrag? = null
                     var released = false
-                    if (result == null && ed.proTool == ProTool.Selection && hit != null && hitRow != null && !hitRow.track.locked) {
+                    if (result == null && hit != null && hitRow != null && !hitRow.track.locked) {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         while (true) {
                             val ev = awaitPointerEvent()
