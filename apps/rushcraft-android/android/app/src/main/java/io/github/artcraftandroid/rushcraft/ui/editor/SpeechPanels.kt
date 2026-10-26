@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -382,4 +385,193 @@ fun SpeechPanel(ed: EditorController, panel: Panel.Speech, close: () -> Unit, mo
             },
         )
     }
+}
+
+/**
+ * Edit by Text (Pro mode): the sequence's transcript, made on the phone. Tap a word to go there
+ * (the word playing is underlined); long-press a word, then tap another, to select the words
+ * between, and delete them with the bin: the sequence is cut there and closes up, picture and
+ * sound together. Filler words and long pauses go in one tap each.
+ */
+@Composable
+fun TextEditPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    var models by remember { mutableStateOf<List<ModelPackage>>(emptyList()) }
+    var model by remember { mutableStateOf(prefs(ctx).getString("model", "whisper-base") ?: "whisper-base") }
+    var language by remember { mutableStateOf(prefs(ctx).getString("language", "auto") ?: "auto") }
+    var asking by remember { mutableStateOf<ModelPackage?>(null) }
+    val download = ModelDownloads.state
+    LaunchedEffect(download == null) { models = withContext(Dispatchers.IO) { speechModels() } }
+    val running = ed.transcriptProgress
+    var view by remember { mutableStateOf<io.github.artcraftandroid.rushcraft.core.TextView?>(null) }
+    LaunchedEffect(ed.timeline?.revision, running == null) { if (running == null) view = ed.textView() }
+    var anchor by remember { mutableStateOf<Int?>(null) }
+    var sel by remember { mutableStateOf<IntRange?>(null) }
+    LaunchedEffect(ed.timeline?.revision) {
+        anchor = null
+        sel = null
+    }
+    var more by remember { mutableStateOf(false) }
+    var pause by remember { mutableStateOf(1.0f) }
+    fun go() {
+        prefs(ctx).edit().putString("model", model).putString("language", language).apply()
+        val m = models.firstOrNull { it.id == model } ?: return
+        if (m.installed) ed.transcribe(model, language) else asking = m
+    }
+    val v = view
+    ToolPanel(
+        "Edit by Text", close, modifier, tag = "text_edit_panel",
+        actions = {
+            val s = sel
+            if (s != null) {
+                PanelAction(LucideIcons.X.glyph(), "Clear the selection", { anchor = null; sel = null }, tag = "text_edit_clear")
+                PanelAction(LucideIcons.Trash2.glyph(), "Delete the selected words", {
+                    ed.deleteWords(listOf(io.github.artcraftandroid.rushcraft.core.WordRange(s.first.toUInt(), s.last.toUInt())))
+                    anchor = null
+                    sel = null
+                }, tag = "text_edit_delete")
+            }
+        },
+    ) {
+        val pad = Modifier.padding(horizontal = FcSize.PanelPadding)
+        when {
+            running != null -> Column(pad) { ProgressBlock(running.stage, running.progress.toFloat(), "Stop", tag = "text_edit_stop") { ed.cancelCaptions() } }
+            download != null && models.any { it.id == download.id } -> Column(pad) { DownloadBlock(download) }
+            v == null || v.words.isEmpty() -> {
+                Text("Transcribe what's said, then edit the video by editing its text.", style = FcType.Body, color = Fc.Body, modifier = pad)
+                Spacer(Modifier.height(16.dp))
+                Text("Spoken language", style = FcType.Label, color = Fc.Secondary, modifier = pad)
+                Spacer(Modifier.height(8.dp))
+                ChipRow { for ((id, name) in LANGUAGES) SelectChip(name, language == id, { language = id }, tag = "text_edit_language_$id") }
+                Spacer(Modifier.height(16.dp))
+                Text("Speech model", style = FcType.Label, color = Fc.Secondary, modifier = pad)
+                Spacer(Modifier.height(8.dp))
+                ChipRow {
+                    for (m in models) {
+                        val label = modelLabel(m.id) + if (m.installed) "" else " · " + megabytes(m.missing.toLong())
+                        SelectChip(label, model == m.id, { model = m.id }, tag = "text_edit_model_${m.id}")
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                PrimaryButton("Transcribe", { go() }, modifier = pad, enabled = models.isNotEmpty(), tag = "text_edit_transcribe")
+                Spacer(Modifier.height(8.dp))
+                Text("The transcript is made on this phone. The sound never leaves it.", style = FcType.BodySmall, color = Fc.Detail, modifier = pad)
+            }
+            else -> {
+                if (v.untranscribed) {
+                    Row(pad.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("There's new sound since the transcript.", style = FcType.BodySmall, color = Fc.Detail, modifier = Modifier.weight(1f))
+                        SelectChip("Transcribe it", false, { go() }, tag = "text_edit_more")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                ChipRow {
+                    SelectChip("Remove filler words", false, { ed.removeFillers(more) }, tag = "text_edit_fillers")
+                    SelectChip("Also \"like\", \"so\", \"you know\"", more, { more = !more }, tag = "text_edit_more_fillers")
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(pad.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    SelectChip("Remove pauses over %.1f s".format(pause), false, { ed.removePauses(pause.toDouble()) }, tag = "text_edit_pauses")
+                    Spacer(Modifier.width(12.dp))
+                    FcSlider(((pause - 0.3f) / 2.7f), { pause = (0.3f + it * 2.7f) }, modifier = Modifier.weight(1f), description = "Shortest pause to remove")
+                }
+                Text(
+                    if (sel == null) "Tap a word to go there. Long-press a word, then tap another, to select the words between." else "Tap another word to change the selection; the bin deletes it.",
+                    style = FcType.BodySmall, color = Fc.Detail, modifier = pad.padding(vertical = 8.dp),
+                )
+                // the playing word
+                val ph = ed.playhead
+                val cur = v.words.indexOfLast { it.start <= ph }.takeIf { it >= 0 && v.words[it].end >= ph }
+                Column(
+                    pad.fillMaxWidth().heightIn(max = 360.dp).clip(RoundedCornerShape(8.dp)).background(Fc.Raised)
+                        .verticalScroll(rememberScrollState()).padding(12.dp).testTag("text_edit_transcript"),
+                ) {
+                    val starts = v.paragraphs.map { it.toInt() } + v.words.size
+                    for (p in 0 until starts.size - 1) {
+                        val a = starts[p]
+                        val b = starts[p + 1]
+                        if (b <= a) continue
+                        val who = v.speakers.getOrNull(p).orEmpty()
+                        if (who.isNotBlank()) Text(who, style = FcType.Caption, color = Fc.AccentLight)
+                        TranscriptParagraph(v.words, a, b, cur, sel, onTap = { i ->
+                            val an = anchor
+                            if (an != null) sel = minOf(an, i)..maxOf(an, i) else ed.seek(v.words[i].start, draft = false)
+                        }, onLongPress = { i ->
+                            anchor = i
+                            sel = i..i
+                        })
+                        Spacer(Modifier.height(10.dp))
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+    asking?.let { m ->
+        DownloadDialog(
+            title = "Download the speech model?",
+            text = "The transcript is made by a speech model on the phone (OpenAI's Whisper, MIT licence). It's ${megabytes(m.missing.toLong())}, downloaded once from Hugging Face, then works offline.",
+            onDismiss = { asking = null },
+            onConfirm = {
+                asking = null
+                val (mid, lang) = model to language
+                ModelDownloads.start(m) { android.os.Handler(android.os.Looper.getMainLooper()).post { ed.transcribe(mid, lang) } }
+            },
+        )
+    }
+}
+
+/** Words [from] until [to] as one paragraph: fillers dim, the playing word underlined, a selection marked. */
+@Composable
+private fun TranscriptParagraph(
+    words: List<io.github.artcraftandroid.rushcraft.core.TextWord>,
+    from: Int,
+    to: Int,
+    current: Int?,
+    selection: IntRange?,
+    onTap: (Int) -> Unit,
+    onLongPress: (Int) -> Unit,
+) {
+    // where each word starts in the text
+    val offsets = IntArray(to - from)
+    val text = androidx.compose.ui.text.buildAnnotatedString {
+        for (i in from until to) {
+            offsets[i - from] = length
+            val w = words[i]
+            val picked = selection != null && i in selection
+            val style = androidx.compose.ui.text.SpanStyle(
+                color = when {
+                    picked -> androidx.compose.ui.graphics.Color.White
+                    w.filler -> Fc.Detail
+                    else -> Fc.Title
+                },
+                background = if (picked) androidx.compose.ui.graphics.Color(0xFFB91C1C) else androidx.compose.ui.graphics.Color.Unspecified,
+                textDecoration = if (i == current) androidx.compose.ui.text.style.TextDecoration.Underline else null,
+            )
+            pushStyle(style)
+            append(w.text)
+            pop()
+            if (i < to - 1) append(" ")
+        }
+    }
+    var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    val tap by androidx.compose.runtime.rememberUpdatedState(onTap)
+    val press by androidx.compose.runtime.rememberUpdatedState(onLongPress)
+    fun wordAt(pos: androidx.compose.ui.geometry.Offset): Int? {
+        val l = layout ?: return null
+        val o = l.getOffsetForPosition(pos)
+        val k = offsets.indexOfLast { it <= o }
+        return if (k >= 0) from + k else null
+    }
+    Text(
+        text,
+        style = TextStyle(fontFamily = Inter, fontSize = 17.sp, lineHeight = 26.sp),
+        onTextLayout = { layout = it },
+        modifier = Modifier.fillMaxWidth().pointerInput(from, to, text) {
+            detectTapGestures(
+                onTap = { p -> wordAt(p)?.let(tap) },
+                onLongPress = { p -> wordAt(p)?.let(press) },
+            )
+        },
+    )
 }
