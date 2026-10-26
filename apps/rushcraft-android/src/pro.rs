@@ -1211,6 +1211,21 @@ pub(crate) fn duck_music(s: &mut Session, clips: &[u64], reduce_db: f64) -> Resu
 /// step; returns the new clips.
 pub(crate) fn place_media(s: &mut Session, paths: &[String], track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
     let items = crate::edits::import(s, paths)?;
+    place_items(s, &items, track, time, "Add Media")
+}
+
+/// Put project item `item` (its Source In to Out, else all of it) at `time` on `track`,
+/// overwriting: a drop from the Project panel or the Source monitor. Returns the new clips.
+pub(crate) fn place_item_at(s: &mut Session, item: u64, track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
+    if s.project.item(filmcraft_project::ItemId(item)).is_none() {
+        return Err(MobileError::Command("That media is no longer in the project.".into()));
+    }
+    place_items(s, &[item], track, time, "Place Clip")
+}
+
+/// `items` back to back from `time`, the picture on `track` when it is a video track (the sound
+/// on the patched or first audio track), the sound on it when it is an audio track. One undo step.
+fn place_items(s: &mut Session, items: &[u64], track: u64, time: i64, label: &str) -> Result<Vec<u64>, MobileError> {
     let (_, seq) = model::sequence(s)?;
     let tapped = seq.track(TrackId(track)).ok_or_else(|| MobileError::Command("That track is gone.".into()))?;
     if tapped.locked {
@@ -1220,10 +1235,10 @@ pub(crate) fn place_media(s: &mut Session, paths: &[String], track: u64, time: i
     let tg = s.targeting();
     let first_video = seq.video_tracks.first().map(|t| t.id);
     let first_audio = seq.audio_tracks.first().map(|t| t.id);
-    let r = s.edit_group("Add Media", |s| {
+    let r = s.edit_group(label, |s| {
         let mut at = Tick(time.max(0));
         let mut out = Vec::new();
-        for &item in &items {
+        for &item in items {
             let (has_video, has_audio) = s.project.source_streams(filmcraft_project::ItemId(item));
             let mut p = json!({"item": item, "time": at.0, "insert": false});
             match (tapped_video, has_video) {

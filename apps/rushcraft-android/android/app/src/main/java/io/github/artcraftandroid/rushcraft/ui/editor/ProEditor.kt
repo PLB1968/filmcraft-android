@@ -126,6 +126,8 @@ fun ProEditor(ed: EditorController) {
     // a hardware keyboard's shortcuts, as on the desktop
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // media dragged from the Project panel or the Source monitor is followed from here
+    val dragHost = remember { CoordsHolder() }
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
@@ -133,6 +135,7 @@ fun ProEditor(ed: EditorController) {
             .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal))
             .statusBarsPadding()
             .navigationBarsPadding()
+            .mediaDragHost(ed, dragHost)
             .focusRequester(focus)
             .focusable()
             .onPreviewKeyEvent { proShortcut(ed, it) }
@@ -141,6 +144,7 @@ fun ProEditor(ed: EditorController) {
         val desktop = maxWidth >= 600.dp || maxWidth > maxHeight
         SideEffect { ed.proDesktop = desktop }
         if (desktop) DesktopLayout(ed) else PortraitLayout(ed)
+        MediaDragGhost(ed, dragHost)
         // the More menu's panels (Captions, Colour, Aspect Ratio…) rise from the bottom
         ed.panel?.let { panel ->
             Box(Modifier.fillMaxSize().background(Fc.SheetScrim).clickable(onClickLabel = "Close panel") { ed.panel = null }, contentAlignment = Alignment.BottomCenter) {
@@ -163,42 +167,53 @@ fun ProEditor(ed: EditorController) {
     }
 }
 
-/** The editor's top bar in Pro mode: Home, the mode switch, undo/redo and Export. */
+/**
+ * The editor's one top bar: Home; the menus (File, Edit, Clip, Sequence, Graphics, Audio) and the
+ * user's Favourites, scrolling between; Undo, Redo and Export.
+ */
 @Composable
 private fun ProTopBar(ed: EditorController) {
     val st = ed.status
-    Row(Modifier.fillMaxWidth().height(FcSize.TopBar).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        HelpIconButton(ed, LucideIcons.House.glyph(), "Home", "home", "editor_home_button", iconSize = 24.dp) { ed.closeEditor() }
-        Text(ed.project.name, style = FcType.Label, color = Fc.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-        HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo (hold for the history)", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = 24.dp, onLongClick = { ed.openHistory() }) { ed.undo() }
-        HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = 24.dp) { ed.redo() }
+    Row(Modifier.fillMaxWidth().height(BarHeight).background(Fc.Panel).padding(horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        HelpIconButton(ed, LucideIcons.House.glyph(), "Home", "home", "editor_home_button", iconSize = BarIcon) { ed.closeEditor() }
+        Row(
+            Modifier.weight(1f).fillMaxHeight().customiseOnHold(ed, ToolbarKind.Favourites).horizontalScroll(rememberScrollState()).testTag("pro_menu_bar"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ProMenus(ed)
+            Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(20.dp).background(Fc.Hairline))
+            FavouriteButtons(ed)
+        }
+        HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo (hold for the history)", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = BarIcon, onLongClick = { ed.openHistory() }) { ed.undo() }
+        HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = BarIcon) { ed.redo() }
         Box(
             Modifier
-                .padding(start = 4.dp, end = 8.dp)
-                .height(36.dp)
-                .clip(RoundedCornerShape(18.dp))
+                .padding(start = 2.dp, end = 6.dp)
+                .height(32.dp)
+                .clip(RoundedCornerShape(16.dp))
                 .background(if (ed.duration > 0L) Color.White else Color.White.copy(alpha = 0.4f))
                 .helpClick(ed, "export") { ed.export() }
-                .padding(horizontal = 14.dp)
+                .padding(horizontal = 12.dp)
                 .testTag("editor_export_button"),
             contentAlignment = Alignment.Center,
         ) {
-            Text("Export", style = FcType.Button, color = Color.Black)
+            Text("Export", style = BarText.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold), color = Color.Black)
         }
     }
 }
 
-/** One entry of a menu in [ProMenuBar]: its label, whether it can be used now, and what it does. */
+/** One entry of a menu in [ProMenus]: its label, whether it can be used now, and what it does. */
 private data class MenuEntry(val label: String, val enabled: Boolean = true, val action: () -> Unit)
 
-/** The menu bar under the top bar, as in Premiere: File, Edit, Clip, Sequence, Graphics, Audio. */
+/** The menus, as in Premiere: File, Edit, Clip, Sequence, Graphics, Audio. */
 @Composable
-private fun ProMenuBar(ed: EditorController) {
+private fun ProMenus(ed: EditorController) {
     val has = ed.duration > 0L
     val picked = ed.proSelection.isNotEmpty()
     val st = ed.status
     val menus: List<Pair<String, List<MenuEntry>>> = listOf(
         "File" to listOf(
+            MenuEntry("Project: ${ed.project.name}", false) {},
             MenuEntry("Import Photos and Videos…") { ed.importToBin(PickKind.PhotosAndVideos) },
             MenuEntry("Import Files…") { ed.importToBin(PickKind.FilesVisual) },
             MenuEntry("Import Sounds…") { ed.importToBin(PickKind.FilesAudio) },
@@ -233,28 +248,25 @@ private fun ProMenuBar(ed: EditorController) {
         ),
     )
     var open by remember { mutableStateOf<String?>(null) }
-    Row(
-        Modifier.fillMaxWidth().height(36.dp).background(Fc.Panel).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp).testTag("pro_menu_bar"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    run {
         for ((name, entries) in menus) {
             Box {
                 Box(
                     Modifier
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (open == name) Fc.Layer1 else Color.Transparent)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (open == name) Fc.Accent.copy(alpha = 0.35f) else Color.Transparent)
                         .helpClick(ed, "menus") { open = name }
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 10.dp)
                         .testTag("pro_menu_${name.lowercase()}"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(name, style = FcType.Label, color = if (open == name) Color.White else Fc.Body, maxLines = 1)
+                    Text(name, style = BarText, color = if (open == name) Color.White else Fc.Body, maxLines = 1)
                 }
                 DropdownMenu(expanded = open == name, onDismissRequest = { open = null }, containerColor = Fc.Panel) {
                     for (e in entries) {
                         DropdownMenuItem(
-                            text = { Text(e.label, style = FcType.Body, color = if (e.enabled) Fc.Body else Fc.Disabled) },
+                            text = { Text(e.label, style = FcType.Body, color = if (e.enabled) Fc.Body else if (e.label.startsWith("Project: ")) Fc.Secondary else Fc.Disabled) },
                             enabled = e.enabled,
                             onClick = {
                                 open = null
@@ -314,8 +326,7 @@ private fun DesktopLayout(ed: EditorController) {
     val density = LocalDensity.current
     Column(Modifier.fillMaxSize()) {
         ProTopBar(ed)
-        ProMenuBar(ed)
-        FavouritesBar(ed)
+        BarDivider()
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
             val w = maxWidth
             val h = maxHeight
@@ -359,8 +370,7 @@ private fun PortraitLayout(ed: EditorController) {
     val density = LocalDensity.current
     Column(Modifier.fillMaxSize()) {
         ProTopBar(ed)
-        ProMenuBar(ed)
-        FavouritesBar(ed)
+        BarDivider()
         // the panel tabs on top, then the Program monitor (drag its bottom edge to resize it), then the panel
         PanelTabs(listOf("Timeline", "Source", "Effects", "Project"), ed.proTab) { ed.proTab = it }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
@@ -473,21 +483,14 @@ private fun ProgramMonitor(ed: EditorController, modifier: Modifier) {
 
 @Composable
 private fun ProTransport(ed: EditorController) {
-    // the buttons wrap onto a second line rather than scroll (the playhead's timecode is above the timeline)
-    FlowRow(
-        Modifier.fillMaxWidth().background(Fc.Panel).customiseOnHold(ed, ToolbarKind.Transport).padding(horizontal = 4.dp),
+    // one line: the essentials (customisable), the rest in ⋯
+    Row(
+        Modifier.fillMaxWidth().height(BarHeight).background(Fc.Panel).customiseOnHold(ed, ToolbarKind.Transport).padding(horizontal = 2.dp).testTag("pro_transport"),
         horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        for (id in ed.toolbar(ToolbarKind.Transport)) BarCommands.of(id)?.let { BarCommandButton(ed, it, ToolbarKind.Transport) }
-        // a proxy being made: how far along, and how many wait (tap for the Project panel)
-        val px = ed.proxies
-        val making = px?.making
-        if (px != null && making != null) {
-            val more = if (px.waiting.isNotEmpty()) " · ${px.waiting.size} more" else ""
-            TextButton44(ed, "proxyProgress", "Proxy ${(px.progress * 100).toInt()}%$more", "pro_program_proxy_progress", true) {
-                if (ed.proDesktop) ed.proSideTab = 1 else ed.proTab = 3
-            }
-        }
+        CommandSlots(ed, ToolbarKind.Transport, ed.toolbar(ToolbarKind.Transport))
+        BarOverflow(ed, ToolbarKind.Transport)
     }
 }
 
@@ -499,7 +502,7 @@ private fun TransportButton(ed: EditorController, help: String, glyph: Glyph, de
 /** A row of panel tabs (44 dp high). */
 @Composable
 private fun PanelTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel)) {
+    Row(Modifier.fillMaxWidth().height(36.dp).background(Fc.Panel)) {
         for ((i, label) in labels.withIndex()) {
             val on = selected == i
             Box(
@@ -531,7 +534,15 @@ private fun SourceMonitor(ed: EditorController, modifier: Modifier) {
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .clickable(enabled = src != null, onClickLabel = "Play or stop the source") { ed.toggleSourcePlay() },
+                // tap: play or stop; hold and drag: its In to Out onto the timeline
+                .mediaDragSource(
+                    ed,
+                    enabled = src != null,
+                    drag = { ed.source?.let { ed.mediaDragOf(it.item, it.name, it.end - it.start) } },
+                    onTap = { ed.toggleSourcePlay() },
+                    onHold = {},
+                )
+                .semantics { contentDescription = "Source picture: tap to play or stop, hold and drag onto the timeline" },
             contentAlignment = Alignment.Center,
         ) {
             val pic = ed.sourcePicture
@@ -542,9 +553,9 @@ private fun SourceMonitor(ed: EditorController, modifier: Modifier) {
             }
         }
         if (src != null) SourceScrubber(ed, src)
-        FlowRow(
-            Modifier.fillMaxWidth().background(Fc.Panel).padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.Center,
+        Row(
+            Modifier.fillMaxWidth().height(BarHeight).background(Fc.Panel).horizontalScroll(rememberScrollState()).padding(horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             val has = src != null
             TransportButton(ed, "sourceMarkIn", ProGlyphs.MarkIn, "Mark In", "pro_source_mark_in", has) { ed.sourceMarkIn() }
@@ -607,7 +618,7 @@ private fun TextButton44(ed: EditorController, help: String, label: String, tag:
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = FcType.Caption, color = if (enabled) Fc.Title else Fc.Disabled, maxLines = 1)
+        Text(label, style = BarText, color = if (enabled) Fc.Title else Fc.Disabled, maxLines = 1)
     }
 }
 
@@ -649,12 +660,16 @@ private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
                             .fillMaxWidth()
                             .height(56.dp)
                             .background(if (open) Fc.Raised else Color.Transparent)
-                            .combinedClickable(
-                                onClick = {
+                            // tap: the Source monitor; hold and drag: onto the timeline; hold: the menu
+                            .mediaDragSource(
+                                ed,
+                                enabled = b.kind != BinKind.MISSING,
+                                drag = { ed.mediaDragOf(b.id, b.name, b.duration) },
+                                onTap = {
                                     ed.openSource(b.id)
                                     if (!ed.proDesktop) ed.proTab = 1
                                 },
-                                onLongClick = { menuFor = b },
+                                onHold = { menuFor = b },
                             )
                             .padding(horizontal = 8.dp)
                             .testTag("pro_bin_item_${b.id}"),
@@ -741,7 +756,7 @@ private fun ProToolBar(ed: EditorController, vertical: Boolean) {
             for (t in shownTools(ed)) ToolButton(ed, t, Modifier.weight(1f).fillMaxWidth())
         }
     } else {
-        Row(Modifier.fillMaxWidth().height(44.dp).background(Fc.Panel).testTag("pro_tool_bar"), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(BarHeight).background(Fc.Panel).testTag("pro_tool_bar"), verticalAlignment = Alignment.CenterVertically) {
             for (t in shownTools(ed)) ToolButton(ed, t, Modifier.weight(1f).fillMaxHeight())
         }
     }
@@ -766,7 +781,7 @@ private fun ToolButton(ed: EditorController, t: ProTool, modifier: Modifier) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(toolGlyph(t), if (on) Color.White else Fc.Icon, size = 20.dp)
+        GlyphIcon(toolGlyph(t), if (on) Color.White else Fc.Icon, size = BarIcon)
     }
 }
 

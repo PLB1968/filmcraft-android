@@ -1255,6 +1255,12 @@ impl MobileSession {
         self.pro_edit(|s| pro::place_media(s, &paths, track, time))
     }
 
+    /// Put project item `item` (its Source In to Out) at `time` on `track`, overwriting: a drag
+    /// from the Project panel or the Source monitor dropped on the timeline.
+    pub fn place_item(&self, item: u64, track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
+        self.pro_edit(|s| pro::place_item_at(s, item, track, time))
+    }
+
     /// A crossfade on the cut after clip `left`: picture and/or sound, `seconds` long.
     pub fn crossfade(&self, left: u64, video: bool, audio: bool, seconds: f64) -> Result<u32, MobileError> {
         self.pro_edit(|s| pro::crossfade(s, left, video, audio, seconds))

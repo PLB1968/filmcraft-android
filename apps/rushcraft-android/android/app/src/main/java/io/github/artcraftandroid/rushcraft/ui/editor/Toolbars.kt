@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -65,20 +68,98 @@ import io.github.artcraftandroid.rushcraft.ui.glyph
 enum class ToolbarKind(val title: String, val defaults: List<String>) {
     Transport(
         "Program Monitor",
-        listOf(
-            "markIn", "markOut", "goToIn", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "goToOut", "addMarker", "prevMarker", "nextMarker",
-            "lift", "extract", "safeMargins", "proxies", "render", "resolution",
-        ),
+        // the essentials, on one line; the rest of the monitor's buttons are in its ⋯ menu
+        listOf("markIn", "markOut", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "addMarker"),
     ),
     Tools("Tools", ProTool.entries.map { it.name }),
     Timeline("Timeline", listOf("snap", "linked", "addMarker", "addTracks", "zoomFit", "markIn", "markOut")),
     Favourites("Favourites", listOf("titles", "captions", "colour", "editText", "voiceover"));
+
+    /** The Program monitor's own buttons, which its ⋯ menu offers when they're not on the bar. */
+    val family: List<String> get() = if (this == Transport) TRANSPORT_FAMILY else emptyList()
 
     /** [id] is a button this bar can hold. */
     fun knows(id: String): Boolean = if (this == Tools) ProTool.entries.any { it.name == id } else BarCommands.of(id) != null
 
     /** Every button this bar can hold, in the order the Add list shows them. */
     val choices: List<String> get() = if (this == Tools) ProTool.entries.map { it.name } else BarCommands.all.map { it.id }
+}
+
+private val TRANSPORT_FAMILY = listOf(
+    "markIn", "markOut", "goToIn", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "goToOut", "addMarker", "prevMarker", "nextMarker",
+    "lift", "extract", "safeMargins", "proxies", "render", "resolution",
+)
+
+/** Every bar is this high, with icons this size and text in this style. */
+internal val BarHeight = 44.dp
+internal val BarIcon = 22.dp
+internal val BarText = FcType.Caption.copy(fontSize = 14.sp)
+
+/** A hairline between bars. */
+@Composable
+internal fun BarDivider() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Fc.Hairline))
+}
+
+/**
+ * A bar's buttons [ids] on one line: icons share the width (each at most a touch target wide),
+ * so they fit a phone held upright; with text buttons or many, they scroll instead.
+ */
+@Composable
+internal fun RowScope.CommandSlots(ed: EditorController, bar: ToolbarKind, ids: List<String>) {
+    val cmds = ids.mapNotNull { BarCommands.of(it) }
+    if (cmds.all { it.glyph != null } && cmds.size <= 9) {
+        for (c in cmds) BarCommandButton(ed, c, bar, Modifier.weight(1f).widthIn(max = 52.dp).fillMaxHeight(), size = BarHeight)
+    } else {
+        Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+            for (c in cmds) BarCommandButton(ed, c, bar, size = BarHeight)
+        }
+    }
+}
+
+/**
+ * A ⋯ button opening the [bar]'s family buttons that aren't on it (their state in their names),
+ * then Customise.
+ */
+@Composable
+internal fun BarOverflow(ed: EditorController, bar: ToolbarKind) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            Modifier.size(BarHeight).clip(CircleShape).combinedClickableCompat { open = true }.testTag("bar_${bar.name.lowercase()}_more").semantics { contentDescription = "More ${bar.title} buttons" },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlyphIcon(LucideIcons.Ellipsis.glyph(), Fc.Icon, size = BarIcon)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Fc.Panel) {
+            val shown = ed.toolbar(bar)
+            for (c in bar.family.filter { it !in shown }.mapNotNull { BarCommands.of(it) }) {
+                val enabled = c.enabled(ed)
+                val name = if (c.glyph == null) c.text(ed) else c.label + if (c.on?.invoke(ed) == true) " ✓" else ""
+                DropdownMenuItem(
+                    text = { Text(name, style = FcType.Body, color = if (enabled) Fc.Body else Fc.Disabled) },
+                    enabled = enabled,
+                    onClick = {
+                        open = false
+                        c.run(ed)
+                    },
+                )
+            }
+            // a proxy being made: how far along (tap for the Project panel)
+            val px = ed.proxies
+            if (px?.making != null) {
+                val more = if (px.waiting.isNotEmpty()) " · ${px.waiting.size} more" else ""
+                DropdownMenuItem(text = { Text("Making proxy ${(px.progress * 100).toInt()}%$more", style = FcType.Body, color = Fc.Secondary) }, onClick = {
+                    open = false
+                    if (ed.proDesktop) ed.proSideTab = 1 else ed.proTab = 3
+                })
+            }
+            DropdownMenuItem(text = { Text("Customise…", style = FcType.Body, color = Fc.Body) }, onClick = {
+                open = false
+                ed.customising = bar
+            })
+        }
+    }
 }
 
 /**
@@ -211,9 +292,9 @@ internal fun BarCommandButton(ed: EditorController, c: BarCommand, bar: ToolbarK
             contentAlignment = Alignment.Center,
         ) {
             if (glyph != null) {
-                GlyphIcon(glyph(ed), when { !enabled -> Fc.Disabled; on -> Fc.AccentLight; else -> Fc.Icon }, size = if (size >= 44.dp) 22.dp else 20.dp)
+                GlyphIcon(glyph(ed), when { !enabled -> Fc.Disabled; on -> Fc.AccentLight; else -> Fc.Icon }, size = BarIcon)
             } else {
-                Text(c.text(ed), style = FcType.Caption, color = if (enabled) Fc.Title else Fc.Disabled, maxLines = 1)
+                Text(c.text(ed), style = BarText, color = if (enabled) Fc.Title else Fc.Disabled, maxLines = 1)
             }
         }
         c.menu?.let { items ->
@@ -233,22 +314,15 @@ internal fun BarCommandButton(ed: EditorController, c: BarCommand, bar: ToolbarK
 internal fun Modifier.customiseOnHold(ed: EditorController, bar: ToolbarKind): Modifier =
     pointerInput(bar) { detectTapGestures(onLongPress = { ed.customising = bar }) }
 
-/** The Favourites bar under the menu bar: the user's own one-tap buttons. Hidden while empty. */
+/** The user's Favourites, in the top bar after the menus, then a pencil to customise the bars. */
 @Composable
-internal fun FavouritesBar(ed: EditorController) {
-    val ids = ed.toolbar(ToolbarKind.Favourites)
-    if (ids.isEmpty()) return
-    Row(
-        Modifier.fillMaxWidth().height(40.dp).background(Fc.Layer1).customiseOnHold(ed, ToolbarKind.Favourites).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp).testTag("pro_favourites_bar"),
-        verticalAlignment = Alignment.CenterVertically,
+internal fun FavouriteButtons(ed: EditorController) {
+    for (id in ed.toolbar(ToolbarKind.Favourites)) BarCommands.of(id)?.let { BarCommandButton(ed, it, ToolbarKind.Favourites, size = BarHeight) }
+    Box(
+        Modifier.size(BarHeight).clip(CircleShape).combinedClickableCompat { ed.customising = ToolbarKind.Favourites }.testTag("pro_favourites_customise").semantics { contentDescription = "Customise Toolbars" },
+        contentAlignment = Alignment.Center,
     ) {
-        for (id in ids) BarCommands.of(id)?.let { BarCommandButton(ed, it, ToolbarKind.Favourites, size = 40.dp) }
-        Box(
-            Modifier.size(40.dp).clip(CircleShape).combinedClickableCompat { ed.customising = ToolbarKind.Favourites }.testTag("pro_favourites_customise").semantics { contentDescription = "Customise Toolbars" },
-            contentAlignment = Alignment.Center,
-        ) {
-            GlyphIcon(LucideIcons.Pencil.glyph(), Fc.Detail, size = 18.dp)
-        }
+        GlyphIcon(LucideIcons.Pencil.glyph(), Fc.Detail, size = 18.dp)
     }
 }
 
