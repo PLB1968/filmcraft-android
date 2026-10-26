@@ -455,9 +455,58 @@ pub(crate) fn select_clips(s: &mut Session, clips: &[u64], add: bool) -> Result<
     Ok(())
 }
 
-/// Move a clip to `start` on `track` (overwriting what is there, like a drag with the Selection
-/// tool); linked partners follow while Linked Selection is on.
-pub(crate) fn move_clip(s: &mut Session, clip: u64, track: u64, start: i64) -> Result<(), MobileError> {
+/// Move clip `clip` to `start` on `track`, overwriting. A picture moved up or down by some tracks
+/// (with Linked Selection on) takes its linked sound up or down the same number of audio tracks
+/// (V1→V2: A1→A2), audio tracks added where there are none; each partner keeps its offset in
+/// time. Inside the caller's undo step.
+pub(crate) fn move_linked(s: &mut Session, clip: u64, track: u64, start: i64) -> filmcraft_engine::Result<()> {
+    let start = start.max(0);
+    let plain = json!({"moves": [{"clip": clip, "track": track, "time": start}], "insert": false});
+    let Some(q) = s.active_sequence() else {
+        return s.execute("timeline.move", plain).map(|_| ());
+    };
+    let index = |tracks: &[filmcraft_project::Track], id: TrackId| tracks.iter().position(|t| t.id == id);
+    let Some(f) = model::find(q, ClipId(clip)) else {
+        return s.execute("timeline.move", plain).map(|_| ());
+    };
+    let from = q.video_tracks.get(f.track).map(|t| t.id);
+    let (Some(old), Some(new)) = (from.and_then(|t| index(&q.video_tracks, t)), index(&q.video_tracks, TrackId(track))) else {
+        return s.execute("timeline.move", plain).map(|_| ());
+    };
+    let link = f.clip.link;
+    if f.kind != TrackKind::Video || !s.state.linked_selection || link.is_none() || old == new {
+        return s.execute("timeline.move", plain).map(|_| ());
+    }
+    let shift = new as i64 - old as i64;
+    // each linked sound: its audio track that many down (or up), and its offset from the picture
+    let partners: Vec<(u64, usize, i64)> = q
+        .audio_tracks
+        .iter()
+        .enumerate()
+        .flat_map(|(i, t)| t.items.iter().map(move |c| (i, c)))
+        .filter(|(_, c)| c.link == link)
+        .map(|(i, c)| (c.id.0, (i as i64 + shift).max(0) as usize, c.start.0 - f.clip.start.0))
+        .collect();
+    if partners.is_empty() {
+        return s.execute("timeline.move", plain).map(|_| ());
+    }
+    let need = partners.iter().map(|p| p.1 + 1).max().unwrap_or(0).saturating_sub(q.audio_tracks.len());
+    if need > 0 {
+        s.execute("sequence.addTracks", json!({"video": 0, "audio": need, "audioAfter": "last"}))?;
+    }
+    let audio: Vec<u64> = s.active_sequence().map(|q| q.audio_tracks.iter().map(|t| t.id.0).collect()).unwrap_or_default();
+    let mut moves = vec![json!({"clip": clip, "track": track, "time": start})];
+    for (id, at, off) in partners {
+        if let Some(t) = audio.get(at) {
+            moves.push(json!({"clip": id, "track": t, "time": (start + off).max(0)}));
+        }
+    }
+    s.execute("timeline.move", json!({"moves": moves, "insert": false, "linked": false}))?;
+    Ok(())
+}
+
+/// Clip `clip` may go to `track`: it's there, the track is its kind and not locked.
+pub(crate) fn check_move(s: &Session, clip: u64, track: u64) -> Result<(), MobileError> {
     let (_, seq) = model::sequence(s)?;
     let f = model::find(seq, ClipId(clip)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?;
     let to = seq.track(TrackId(track)).ok_or_else(|| MobileError::Command("That track is gone.".into()))?;
@@ -468,25 +517,28 @@ pub(crate) fn move_clip(s: &mut Session, clip: u64, track: u64, start: i64) -> R
     if to.locked {
         return Err(MobileError::Command(format!("{} is locked.", to.name)));
     }
-    ex(s, "timeline.move", json!({"moves": [{"clip": clip, "track": track, "time": Tick(start.max(0)).0}], "insert": false}))?;
     Ok(())
 }
 
 /// Move clip `clip` to `start` on a new track of its kind, added above the top video track (a
 /// picture) or below the last audio track (a sound): a clip dragged past the outermost track.
 /// One undo step.
-pub(crate) fn move_clip_to_new_track(s: &mut Session, clip: u64, start: i64) -> Result<(), MobileError> {
+pub(crate) fn clip_is_video(s: &Session, clip: u64) -> Result<bool, MobileError> {
     let (_, seq) = model::sequence(s)?;
     let f = model::find(seq, ClipId(clip)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?;
-    let video = f.kind == TrackKind::Video;
-    s.edit_group("Move Clip to New Track", |s| {
-        s.execute("sequence.addTracks", json!({"video": u32::from(video), "audio": u32::from(!video), "videoAfter": "last", "audioAfter": "last"}))?;
-        // the track just added: the last of its kind
-        let track = s.active_sequence().and_then(|q| if video { q.video_tracks.last() } else { q.audio_tracks.last() }).map(|t| t.id.0);
-        s.execute("timeline.move", json!({"moves": [{"clip": clip, "track": track, "time": start.max(0)}], "insert": false}))?;
-        Ok(())
-    })?;
-    Ok(())
+    Ok(f.kind == TrackKind::Video)
+}
+
+/// The steps of [`crate::MobileSession::pro_move_to_new_track`]: a track of its kind (a
+/// picture's, `video`), then the clip onto it (inside the caller's one undo step).
+pub(crate) fn to_new_track(s: &mut Session, clip: u64, start: i64, video: bool) -> filmcraft_engine::Result<()> {
+    s.execute("sequence.addTracks", json!({"video": u32::from(video), "audio": u32::from(!video), "videoAfter": "last", "audioAfter": "last"}))?;
+    // the track just added: the last of its kind
+    let track = s.active_sequence().and_then(|q| if video { q.video_tracks.last() } else { q.audio_tracks.last() }).map(|t| t.id.0);
+    match track {
+        Some(t) => move_linked(s, clip, t, start),
+        None => Ok(()),
+    }
 }
 
 /// Delete the selected clips (Clear), or delete them and close the gap they leave (Ripple

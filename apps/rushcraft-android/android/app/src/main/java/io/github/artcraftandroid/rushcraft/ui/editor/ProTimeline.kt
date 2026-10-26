@@ -227,7 +227,8 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                     // the ruler, under the header column's corner
                     Row(Modifier.fillMaxWidth().height(Touch)) {
                         Box(Modifier.width(header).fillMaxHeight().background(Fc.Panel).padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
-                            Text(inOutLabel(p), style = FcType.Badge, color = Fc.Secondary, maxLines = 1)
+                            // In/Out only when one is set (Mark In/Out are in the monitor's ⋯ menu)
+                            if (p.markIn != null || p.markOut != null) Text(inOutLabel(p), style = FcType.Badge, color = Fc.Secondary, maxLines = 1)
                         }
                         Ruler(
                             ed, p, ::xOf, ::tOf,
@@ -1547,7 +1548,18 @@ private fun Tracks(
                 val ghost = ghosts[c.id]
                 drawClip(c, r, xOf(c.start), xOf(c.start + c.duration), measurer, labelStyle, alpha = if (moves || ghost != null) 0.35f else 1f)
                 if (moves && dr != null) {
-                    val row = if (c.id == dr.clip.id) (moveTarget ?: r) else r
+                    // the dragged clip on the track under the finger; its linked sound (Linked
+                    // Selection) as many audio tracks down as the picture goes up, where there is one
+                    val row = when {
+                        c.id == dr.clip.id -> moveTarget ?: r
+                        p.linkedSelection && dr.clip.link != null && c.link == dr.clip.link && moveTarget != null &&
+                            p.videoTracks.any { it.id == dr.clip.track } && p.videoTracks.none { it.id == c.track } -> {
+                            val shift = p.videoTracks.indexOfFirst { it.id == moveTarget.track.id } - p.videoTracks.indexOfFirst { it.id == dr.clip.track }
+                            val at = p.audioTracks.indexOfFirst { it.id == c.track } + shift
+                            p.audioTracks.getOrNull(at.coerceAtLeast(0))?.let { t -> rows.firstOrNull { it.track.id == t.id } } ?: r
+                        }
+                        else -> r
+                    }
                     drawClip(c, row, xOf(c.start + moveShift), xOf(c.start + moveShift + c.duration), measurer, labelStyle, alpha = 0.9f, ghost = true)
                 }
                 if (ghost != null) drawClip(c, r, xOf(ghost.first), xOf(ghost.first + ghost.second), measurer, labelStyle, alpha = 0.9f, ghost = true)
@@ -1619,14 +1631,7 @@ private fun Tracks(
                 }
             }
         }
-        // In to Out, across the tracks
-        val i = p.markIn
-        val o = p.markOut
-        if (i != null || o != null) {
-            val x0 = i?.let(xOf) ?: 0f
-            val x1 = o?.let(xOf) ?: w
-            drawRect(Fc.Accent.copy(alpha = 0.10f), Offset(x0, 0f), Size(max(0f, x1 - x0), size.height))
-        }
+        // (In to Out shows on the ruler only)
         // markers, as lines through the tracks
         for (m in p.markers) {
             val x = xOf(m.start)
