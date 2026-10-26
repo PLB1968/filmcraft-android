@@ -37,6 +37,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
@@ -391,10 +399,12 @@ fun SpeechPanel(ed: EditorController, panel: Panel.Speech, close: () -> Unit, mo
  * Edit by Text (Pro mode): the sequence's transcript, made on the phone. Tap a word to go there
  * (the word playing is underlined); long-press a word, then tap another, to select the words
  * between, and delete them with the bin: the sequence is cut there and closes up, picture and
- * sound together. Filler words and long pauses go in one tap each.
+ * sound together. Filler words and long pauses go in one tap each. A panel that rises from the
+ * bottom, or ([docked]) the strip under the timeline, where the words fill the height left and
+ * follow the playhead.
  */
 @Composable
-fun TextEditPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
+fun TextEditPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier, docked: Boolean = false) {
     val ctx = LocalContext.current
     var models by remember { mutableStateOf<List<ModelPackage>>(emptyList()) }
     var model by remember { mutableStateOf(prefs(ctx).getString("model", "whisper-base") ?: "whisper-base") }
@@ -419,25 +429,28 @@ fun TextEditPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
         if (m.installed) ed.transcribe(model, language) else asking = m
     }
     val v = view
-    ToolPanel(
-        "Edit by Text", close, modifier, tag = "text_edit_panel",
-        actions = {
-            val s = sel
-            if (s != null) {
-                PanelAction(LucideIcons.X.glyph(), "Clear the selection", { anchor = null; sel = null }, tag = "text_edit_clear")
-                PanelAction(LucideIcons.Trash2.glyph(), "Delete the selected words", {
-                    ed.deleteWords(listOf(io.github.artcraftandroid.rushcraft.core.WordRange(s.first.toUInt(), s.last.toUInt())))
-                    anchor = null
-                    sel = null
-                }, tag = "text_edit_delete")
-            }
-        },
-    ) {
+    val actions: @Composable RowScope.() -> Unit = {
+        val s = sel
+        if (s != null) {
+            PanelAction(LucideIcons.CircleX.glyph(), "Clear the selection", { anchor = null; sel = null }, tag = "text_edit_clear")
+            PanelAction(LucideIcons.Trash2.glyph(), "Delete the selected words", {
+                ed.deleteWords(listOf(io.github.artcraftandroid.rushcraft.core.WordRange(s.first.toUInt(), s.last.toUInt())))
+                anchor = null
+                sel = null
+            }, tag = "text_edit_delete")
+        }
+    }
+    // the transcript follows the playhead: each paragraph's top, the playing word's line in it
+    val scroll = rememberScrollState()
+    val tops = remember { mutableStateMapOf<Int, Float>() }
+    var lineTop by remember { mutableFloatStateOf(0f) }
+    var viewport by remember { mutableIntStateOf(0) }
+    val body: @Composable ColumnScope.() -> Unit = {
         val pad = Modifier.padding(horizontal = FcSize.PanelPadding)
         when {
             running != null -> Column(pad) { ProgressBlock(running.stage, running.progress.toFloat(), "Stop", tag = "text_edit_stop") { ed.cancelCaptions() } }
             download != null && models.any { it.id == download.id } -> Column(pad) { DownloadBlock(download) }
-            v == null || v.words.isEmpty() -> {
+            v == null || v.words.isEmpty() -> Column(if (docked) Modifier.weight(1f).verticalScroll(rememberScrollState()) else Modifier) {
                 Text("Transcribe what's said, then edit the video by editing its text.", style = FcType.Body, color = Fc.Body, modifier = pad)
                 Spacer(Modifier.height(16.dp))
                 Text("Spoken language", style = FcType.Label, color = Fc.Secondary, modifier = pad)
@@ -465,47 +478,88 @@ fun TextEditPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
                     }
                     Spacer(Modifier.height(8.dp))
                 }
-                ChipRow {
-                    SelectChip("Remove filler words", false, { ed.removeFillers(more) }, tag = "text_edit_fillers")
-                    SelectChip("Also \"like\", \"so\", \"you know\"", more, { more = !more }, tag = "text_edit_more_fillers")
+                if (docked) {
+                    // one row, to leave the height to the words
+                    Row(
+                        Modifier.fillMaxWidth().height(44.dp).horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SelectChip("Remove filler words", false, { ed.removeFillers(more) }, tag = "text_edit_fillers")
+                        SelectChip("Also \"like\", \"so\"…", more, { more = !more }, tag = "text_edit_more_fillers")
+                        SelectChip("Remove pauses over %.1f s".format(pause), false, { ed.removePauses(pause.toDouble()) }, tag = "text_edit_pauses")
+                        FcSlider(((pause - 0.3f) / 2.7f), { pause = (0.3f + it * 2.7f) }, modifier = Modifier.width(140.dp), description = "Shortest pause to remove")
+                    }
+                } else {
+                    ChipRow {
+                        SelectChip("Remove filler words", false, { ed.removeFillers(more) }, tag = "text_edit_fillers")
+                        SelectChip("Also \"like\", \"so\", \"you know\"", more, { more = !more }, tag = "text_edit_more_fillers")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(pad.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                        SelectChip("Remove pauses over %.1f s".format(pause), false, { ed.removePauses(pause.toDouble()) }, tag = "text_edit_pauses")
+                        Spacer(Modifier.width(12.dp))
+                        FcSlider(((pause - 0.3f) / 2.7f), { pause = (0.3f + it * 2.7f) }, modifier = Modifier.weight(1f), description = "Shortest pause to remove")
+                    }
+                    Text(
+                        if (sel == null) "Tap a word to go there. Long-press a word, then tap another, to select the words between." else "Tap another word to change the selection; the bin deletes it.",
+                        style = FcType.BodySmall, color = Fc.Detail, modifier = pad.padding(vertical = 8.dp),
+                    )
                 }
-                Spacer(Modifier.height(8.dp))
-                Row(pad.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-                    SelectChip("Remove pauses over %.1f s".format(pause), false, { ed.removePauses(pause.toDouble()) }, tag = "text_edit_pauses")
-                    Spacer(Modifier.width(12.dp))
-                    FcSlider(((pause - 0.3f) / 2.7f), { pause = (0.3f + it * 2.7f) }, modifier = Modifier.weight(1f), description = "Shortest pause to remove")
-                }
-                Text(
-                    if (sel == null) "Tap a word to go there. Long-press a word, then tap another, to select the words between." else "Tap another word to change the selection; the bin deletes it.",
-                    style = FcType.BodySmall, color = Fc.Detail, modifier = pad.padding(vertical = 8.dp),
-                )
                 // the playing word
                 val ph = ed.playhead
                 val cur = v.words.indexOfLast { it.start <= ph }.takeIf { it >= 0 && v.words[it].end >= ph }
+                val starts = v.paragraphs.map { it.toInt() } + v.words.size
+                val curPara = cur?.let { c -> (0 until starts.size - 1).firstOrNull { c >= starts[it] && c < starts[it + 1] } }
+                // keep the playing word in sight (not while the words are being scrolled by hand)
+                LaunchedEffect(curPara, lineTop) {
+                    val top = curPara?.let { tops[it] } ?: return@LaunchedEffect
+                    val y = top + lineTop
+                    if (viewport > 0 && !scroll.isScrollInProgress && (y < scroll.value || y > scroll.value + viewport * 0.75f)) {
+                        scroll.animateScrollTo((y - viewport / 3f).toInt().coerceAtLeast(0))
+                    }
+                }
                 Column(
-                    pad.fillMaxWidth().heightIn(max = 360.dp).clip(RoundedCornerShape(8.dp)).background(Fc.Raised)
-                        .verticalScroll(rememberScrollState()).padding(12.dp).testTag("text_edit_transcript"),
+                    pad.fillMaxWidth()
+                        .then(if (docked) Modifier.weight(1f) else Modifier.heightIn(max = 360.dp))
+                        .clip(RoundedCornerShape(8.dp)).background(Fc.Raised)
+                        .onSizeChanged { viewport = it.height }
+                        .verticalScroll(scroll).padding(12.dp).testTag("text_edit_transcript"),
                 ) {
-                    val starts = v.paragraphs.map { it.toInt() } + v.words.size
                     for (p in 0 until starts.size - 1) {
                         val a = starts[p]
                         val b = starts[p + 1]
                         if (b <= a) continue
-                        val who = v.speakers.getOrNull(p).orEmpty()
-                        if (who.isNotBlank()) Text(who, style = FcType.Caption, color = Fc.AccentLight)
-                        TranscriptParagraph(v.words, a, b, cur, sel, onTap = { i ->
-                            val an = anchor
-                            if (an != null) sel = minOf(an, i)..maxOf(an, i) else ed.seek(v.words[i].start, draft = false)
-                        }, onLongPress = { i ->
-                            anchor = i
-                            sel = i..i
-                        })
+                        Column(Modifier.onGloballyPositioned { tops[p] = it.positionInParent().y }) {
+                            val who = v.speakers.getOrNull(p).orEmpty()
+                            if (who.isNotBlank()) Text(who, style = FcType.Caption, color = Fc.AccentLight)
+                            TranscriptParagraph(v.words, a, b, cur, sel, onTap = { i ->
+                                val an = anchor
+                                if (an != null) sel = minOf(an, i)..maxOf(an, i) else ed.seek(v.words[i].start, draft = false)
+                            }, onLongPress = { i ->
+                                anchor = i
+                                sel = i..i
+                            }, onCurrentLine = { lineTop = it })
+                        }
                         Spacer(Modifier.height(10.dp))
                     }
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(if (docked) 8.dp else 16.dp))
+    }
+    if (docked) {
+        Column(modifier.background(Fc.Panel).testTag("text_edit_dock")) {
+            Row(Modifier.fillMaxWidth().height(44.dp).padding(start = FcSize.PanelPadding, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Edit by Text", style = FcType.Label, color = Fc.Title, modifier = Modifier.weight(1f))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+                Spacer(Modifier.width(8.dp))
+                PanelAction(LucideIcons.X.glyph(), "Close Edit by Text", close, tag = "text_edit_dock_close")
+            }
+            body()
+        }
+    } else {
+        ToolPanel("Edit by Text", close, modifier, tag = "text_edit_panel", actions = actions, content = body)
     }
     asking?.let { m ->
         DownloadDialog(
@@ -531,6 +585,7 @@ private fun TranscriptParagraph(
     selection: IntRange?,
     onTap: (Int) -> Unit,
     onLongPress: (Int) -> Unit,
+    onCurrentLine: (Float) -> Unit = {},
 ) {
     // where each word starts in the text
     val offsets = IntArray(to - from)
@@ -562,6 +617,11 @@ private fun TranscriptParagraph(
         val o = l.getOffsetForPosition(pos)
         val k = offsets.indexOfLast { it <= o }
         return if (k >= 0) from + k else null
+    }
+    // the playing word's line, for the transcript to scroll to
+    LaunchedEffect(current, layout) {
+        val l = layout
+        if (l != null && current != null && current in from until to) onCurrentLine(l.getLineTop(l.getLineForOffset(offsets[current - from])))
     }
     Text(
         text,

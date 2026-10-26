@@ -157,7 +157,7 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
     val header = if (compact) 132.dp else 216.dp
     Box(modifier.background(Fc.Black).testTag("pro_timeline")) {
         Column(Modifier.fillMaxSize()) {
-            TimelineBar(ed, p, compact) { items -> menu = ProMenu(Offset(with(density) { 160.dp.toPx() }, 0f), items) }
+            TimelineBar(ed, compact)
             if (p == null) return@Column
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 val headerPx = with(density) { header.toPx() }
@@ -359,13 +359,14 @@ private fun inOutLabel(p: ProTimeline): String {
 }
 
 /**
- * The bar over the timeline: the playhead's timecode, Snap, Linked Selection, Add Marker, Add
- * Tracks, zoom and In/Out. The buttons share the width, so the bar fits a phone held upright.
+ * The bar over the timeline: the playhead's timecode, then the buttons the user keeps there
+ * (Snap, Linked Selection, Add Marker, Add Tracks, zoom and In/Out to begin with). Icons share
+ * the width, so the bar fits a phone held upright; with text buttons or many, it scrolls.
  */
 @Composable
-private fun TimelineBar(ed: EditorController, p: ProTimeline?, compact: Boolean, onMenu: (List<Pair<String, () -> Unit>>) -> Unit) {
+private fun TimelineBar(ed: EditorController, compact: Boolean) {
     Row(
-        Modifier.fillMaxWidth().height(Touch).background(Fc.Panel).padding(horizontal = 6.dp),
+        Modifier.fillMaxWidth().height(Touch).background(Fc.Panel).customiseOnHold(ed, ToolbarKind.Timeline).padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -379,50 +380,17 @@ private fun TimelineBar(ed: EditorController, p: ProTimeline?, compact: Boolean,
         if (!compact) {
             Text("${ed.proTool.label} (${ed.proTool.key})", style = FcType.Caption, color = Fc.Secondary, maxLines = 1, modifier = Modifier.padding(end = 8.dp).testTag("pro_tool_name"))
         }
-        val snapping = p?.snapping == true
-        val linked = p?.linkedSelection == true
-        val slot = Modifier.weight(1f).widthIn(max = Touch).fillMaxHeight()
-        BarToggle(ed, "snap", ProGlyphs.Magnet, "Snap in Timeline", snapping, "pro_snap", slot) { ed.setSnapping(!snapping) }
-        BarToggle(ed, "linked", ProGlyphs.Link, "Linked Selection", linked, "pro_linked_selection", slot) { ed.setLinkedSelection(!linked) }
-        BarButton(ed, "addMarker", ProGlyphs.Marker, "Add Marker", "pro_add_marker", slot) { ed.addMarker() }
-        BarButton(ed, "addTracks", LucideIcons.Plus.glyph(), "Add Tracks", "pro_add_tracks", slot) {
-            onMenu(listOf("Add Video Track" to { ed.addTracks(1, 0) }, "Add Audio Track" to { ed.addTracks(0, 1) }, "Add Video and Audio Track" to { ed.addTracks(1, 1) }))
+        val ids = ed.toolbar(ToolbarKind.Timeline)
+        val cmds = ids.mapNotNull { BarCommands.of(it) }
+        if (cmds.all { it.glyph != null } && cmds.size <= 9) {
+            // icons share the bar's length (each at most a touch target), so they all fit without scrolling
+            val slot = Modifier.weight(1f).widthIn(max = Touch).fillMaxHeight()
+            for (c in cmds) BarCommandButton(ed, c, ToolbarKind.Timeline, slot, size = Touch)
+        } else {
+            Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                for (c in cmds) BarCommandButton(ed, c, ToolbarKind.Timeline, size = Touch)
+            }
         }
-        BarButton(ed, "zoomFit", ProGlyphs.Fit, "Zoom to Sequence", "pro_zoom_fit", slot) {
-            ed.proPxPerSecond = 0f
-            ed.proScroll = 0L
-        }
-        BarButton(ed, "markIn", ProGlyphs.MarkIn, "Mark In", "pro_mark_in", slot) { ed.markIn() }
-        BarButton(ed, "markOut", ProGlyphs.MarkOut, "Mark Out", "pro_mark_out", slot) { ed.markOut() }
-    }
-}
-
-@Composable
-private fun BarToggle(ed: EditorController, help: String, glyph: Glyph, description: String, on: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
-    Box(
-        modifier
-            .padding(2.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (on) Fc.Accent.copy(alpha = 0.35f) else Color.Transparent)
-            .helpClick(ed, help, role = Role.Switch, onClick = onClick)
-            .testTag(tag)
-            .semantics {
-                contentDescription = description
-                selected = on
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        GlyphIcon(glyph, if (on) Fc.AccentLight else Fc.Icon, size = 20.dp)
-    }
-}
-
-@Composable
-private fun BarButton(ed: EditorController, help: String, glyph: Glyph, description: String, tag: String, modifier: Modifier, onClick: () -> Unit) {
-    Box(
-        modifier.clip(RoundedCornerShape(8.dp)).helpClick(ed, help, onClick = onClick).testTag(tag).semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        GlyphIcon(glyph, Fc.Icon, size = 20.dp)
     }
 }
 
