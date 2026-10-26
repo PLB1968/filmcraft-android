@@ -153,6 +153,7 @@ fun ProEditor(ed: EditorController) {
         }
         if (ed.showHistory) ed.history?.let { HistoryDialog(ed, it) }
         ed.customising?.let { CustomiseToolbarsDialog(ed, it) }
+        ed.markerEditing?.let { id -> ed.pro?.markers?.firstOrNull { it.id == id }?.let { m -> MarkerDialog(ed, m) { ed.markerEditing = null } } }
         if (ed.camera) CameraScreen(ed)
         ed.titleAt?.let { at -> TitleDialog(ed, at) }
         ed.busy?.let { text ->
@@ -234,6 +235,7 @@ private fun ProMenus(ed: EditorController) {
         ),
         "Sequence" to listOf(
             MenuEntry("Aspect Ratio…") { ed.panel = Panel.AspectRatio },
+            MenuEntry("Markers…", ed.pro?.markers?.isNotEmpty() == true) { ed.panel = Panel.Markers },
             MenuEntry("Scene Edit Detection", has) { ed.detectScenes() },
             MenuEntry("Beat Markers", picked) { ed.beatMarkers() },
         ),

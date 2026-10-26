@@ -69,7 +69,7 @@ enum class ToolbarKind(val title: String, val defaults: List<String>) {
     Transport(
         "Program Monitor",
         // the essentials, on one line; the rest of the monitor's buttons are in its ⋯ menu
-        listOf("markIn", "markOut", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "addMarker"),
+        listOf("markIn", "markOut", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "addMarker", "deleteMarker"),
     ),
     Tools("Tools", ProTool.entries.map { it.name }),
     Timeline("Timeline", listOf("snap", "linked", "addMarker", "addTracks", "zoomFit", "markIn", "markOut")),
@@ -86,8 +86,8 @@ enum class ToolbarKind(val title: String, val defaults: List<String>) {
 }
 
 private val TRANSPORT_FAMILY = listOf(
-    "markIn", "markOut", "goToIn", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "goToOut", "addMarker", "prevMarker", "nextMarker",
-    "lift", "extract", "safeMargins", "proxies", "render", "resolution",
+    "markIn", "markOut", "goToIn", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "goToOut", "addMarker", "deleteMarker", "prevMarker", "nextMarker",
+    "markers", "lift", "extract", "safeMargins", "proxies", "render", "resolution",
 )
 
 /** Every bar is this high, with icons this size and text in this style. */
@@ -204,7 +204,16 @@ object BarCommands {
             glyph = icon(ProGlyphs.GoToEnd), enabled = has, hold = { it.goToSequenceEdge(end = true) },
         ) { it.goToCut(next = true) },
         BarCommand("goToOut", "Go to Out", help = "goToOut", glyph = icon(ProGlyphs.GoToOut), enabled = { it.pro?.markOut != null }) { it.goToOut() },
-        BarCommand("addMarker", "Add Marker", help = "addMarker", glyph = icon(ProGlyphs.Marker), enabled = has) { it.addMarker() },
+        // on a marker: edits it
+        BarCommand(
+            "addMarker", "Add Marker / Edit Marker", "Adds a marker at the playhead; on a marker, opens it to rename, recolour or delete.",
+            glyph = { if (it.markerAtPlayhead != null) LucideIcons.Pencil.glyph() else ProGlyphs.Marker }, enabled = has,
+        ) { e -> e.markerAtPlayhead?.let { e.markerEditing = it.id } ?: e.addMarker() },
+        BarCommand(
+            "deleteMarker", "Delete Marker", "Deletes the marker at the playhead.",
+            glyph = icon(LucideIcons.Trash2.glyph()), enabled = { it.markerAtPlayhead != null },
+        ) { e -> e.markerAtPlayhead?.let { e.deleteMarker(it.id) } },
+        BarCommand("markers", "Markers", "Every marker: go to one, edit it or delete it.", text = { "Markers" }, enabled = { it.pro?.markers?.isNotEmpty() == true }) { it.panel = Panel.Markers },
         BarCommand("prevMarker", "Go to Previous Marker", help = "prevMarker", glyph = icon(LucideIcons.ChevronLeft.glyph()), enabled = { it.pro?.markers?.isNotEmpty() == true }) { it.goToMarker(next = false) },
         BarCommand("nextMarker", "Go to Next Marker", help = "nextMarker", glyph = icon(LucideIcons.ChevronRight.glyph()), enabled = { it.pro?.markers?.isNotEmpty() == true }) { it.goToMarker(next = true) },
         BarCommand("lift", "Lift", help = "lift", enabled = { it.pro?.markIn != null || it.pro?.markOut != null }) { it.liftExtract(extract = false) },
