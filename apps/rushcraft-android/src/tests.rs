@@ -1567,6 +1567,39 @@ fn sequences_are_made_switched_renamed_copied_nested_and_deleted() {
 }
 
 #[test]
+fn ken_burns_goes_from_a_start_view_to_an_end_view_and_photos_can_get_one_by_themselves() {
+    let (m, d, ids) = two_clips();
+    let v = |x: f64, y: f64, size: f64| motion::KbView { x, y, size };
+    // from the whole picture into its top-left quarter, over the middle half, at an even pace
+    let mv = motion::KbMove { start: v(0.5, 0.5, 1.0), end: v(0.3, 0.3, 0.5), smooth: false, from: 0.25, to: 0.75 };
+    m.set_ken_burns(ids[0], mv).unwrap();
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Ken Burns"));
+    let got = m.ken_burns_info(ids[0]).unwrap().current.expect("the move reads back");
+    assert!((got.start.size - 1.0).abs() < 0.02 && (got.end.size - 0.5).abs() < 0.02, "{got:?}");
+    assert!(got.end.x < 0.45 && got.end.y < 0.45, "towards the top left: {got:?}");
+    assert!(!got.smooth && (got.from - 0.25).abs() < 0.03 && (got.to - 0.75).abs() < 0.03, "{got:?}");
+    // a view that would show past the picture's edge is pulled back inside it
+    m.set_ken_burns(ids[0], motion::KbMove { end: v(0.0, 0.0, 0.5), ..mv }).unwrap();
+    let e = m.ken_burns_info(ids[0]).unwrap().current.unwrap().end;
+    // (the clip is wider than the upright frame: room to the sides, none above and below)
+    assert!(e.x > 0.05 && e.y >= 0.24, "{e:?}");
+    // every preset is a move that stays inside the picture
+    for k in [motion::KenBurns::PanUp, motion::KenBurns::PanDown, motion::KenBurns::Diagonal, motion::KenBurns::ZoomCorner, motion::KenBurns::Random] {
+        m.ken_burns(ids[0], k, 0.2).unwrap();
+        let c = m.ken_burns_info(ids[0]).unwrap().current.expect("a move");
+        assert!(c.start.size <= 1.0 + 1e-6 && c.end.size <= 1.0 + 1e-6, "{k:?} {c:?}");
+    }
+    // Ken Burns on photos: a photo placed gets a move of its own; a video doesn't
+    m.set_auto_ken_burns(true);
+    let v1 = m.pro_timeline().unwrap().video_tracks[0].id;
+    let placed = m.place_media(vec![picture(&d)], v1, 10 * SEC).unwrap();
+    let photo = placed.into_iter().find(|c| m.pro_timeline().unwrap().clips.iter().any(|x| x.id == *c && x.track == v1)).expect("the photo");
+    assert!(m.ken_burns_info(photo).unwrap().current.is_some(), "the photo moves");
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Add Media"), "one undo step");
+    assert!(m.ken_burns_info(ids[1]).unwrap().current.is_none(), "the video was left alone");
+}
+
+#[test]
 fn a_fade_is_keyframes_with_a_middle_one_that_bends_it_and_the_linked_sound_follows() {
     let (m, _d, ids) = two_clips();
     let c = pclip(&m, ids[0]);

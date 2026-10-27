@@ -233,6 +233,7 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
                         }
                         Ruler(
                             ed, p, ::xOf, ::tOf,
+                            onPan = { dx -> setScroll(ed.proScroll - (dx / pps() * TPS).roundToLong()) },
                             onMarker = { at ->
                                 val near = with(density) { 16.dp.toPx() }
                                 val m = p.markers.minByOrNull { abs(xOf(it.start) - at.x) }?.takeIf { abs(xOf(it.start) - at.x) < near }
@@ -413,7 +414,7 @@ private fun TimelineBar(ed: EditorController, compact: Boolean) {
     }
 }
 
-/** The timecode ruler: tap or drag to move the playhead, long press for In/Out and markers. */
+/** The timecode ruler: a drag scrolls the timeline, a tap moves the playhead there, its head drags to scrub; markers sit on it. */
 @Composable
 private fun Ruler(
     ed: EditorController,
@@ -422,8 +423,10 @@ private fun Ruler(
     tOf: (Float) -> Long,
     onMarker: (Offset) -> Unit,
     onMarkerMenu: (Offset, ProMarker) -> Unit,
+    onPan: (Float) -> Unit,
     modifier: Modifier,
 ) {
+    val pan by rememberUpdatedState(onPan)
     val measurer = rememberTextMeasurer()
     val tAt by rememberUpdatedState(tOf)
     val xAt by rememberUpdatedState(xOf)
@@ -454,9 +457,12 @@ private fun Ruler(
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     val double = lastTap?.let { (t, at) -> down.uptimeMillis - t < viewConfiguration.doubleTapTimeoutMillis && (at - down.position).getDistance() < 24.dp.toPx() } == true
+                    // the playhead's head (the ruler's lower part): a drag scrubs
+                    val onHead = down.position.y >= size.height * 0.4f && abs(xAt(ed.playhead) - down.position.x) < 16.dp.toPx()
                     // a marker's flag (the ruler's upper part): a tap goes to it (a double tap edits
-                    // it), a long press opens its menu, a drag moves it
-                    val grab = if (down.position.y < size.height * 0.6f) {
+                    // it); hold it (a buzz), then drag to move it, or let go for its menu. A plain
+                    // drag over it scrubs, as anywhere on the ruler, so markers don't move by accident
+                    val grab = if (!onHead && down.position.y < size.height * 0.6f) {
                         pNow.markers.minByOrNull { abs(xAt(it.start) - down.position.x) }?.takeIf { abs(xAt(it.start) - down.position.x) < 14.dp.toPx() }
                     } else {
                         null
@@ -475,23 +481,32 @@ private fun Ruler(
                             r
                         }
                         when (r) {
-                            "up" -> if (double) {
-                                lastTap = null
-                                markerAt(down.position)
-                            } else {
-                                lastTap = down.uptimeMillis to down.position
-                                ed.seek(grab.start, draft = false)
+                            "up" -> {
+                                if (double) {
+                                    lastTap = null
+                                    markerAt(down.position)
+                                } else {
+                                    lastTap = down.uptimeMillis to down.position
+                                    ed.seek(grab.start, draft = false)
+                                }
+                                return@awaitEachGesture
                             }
                             null -> {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                markerMenuAt(down.position, grab)
+                                // held: a drag now moves it, letting go opens its menu
+                                var picked = false
                                 while (true) {
-                                    val ev = awaitPointerEvent()
-                                    ev.changes.forEach { it.consume() }
-                                    if (ev.changes.none { it.pressed }) break
+                                    val c = awaitPointerEvent().changes.firstOrNull() ?: break
+                                    if (!c.pressed) break
+                                    if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                                        picked = true
+                                        break
+                                    }
                                 }
-                            }
-                            else -> {
+                                if (!picked) {
+                                    markerMenuAt(down.position, grab)
+                                    return@awaitEachGesture
+                                }
                                 val reach = 10.dp.toPx()
                                 markerDrag = grab.id to grab.start
                                 while (true) {
@@ -508,29 +523,51 @@ private fun Ruler(
                                 markerDrag = null
                                 ed.playheadSnap = null
                                 if (to != null && to != grab.start) ed.moveMarker(grab.id, to)
+                                return@awaitEachGesture
                             }
+                            // a drag without the hold: the timeline scrolls, below
+                            else -> {}
                         }
+                    }
+                    if (onHead) {
+                        // the playhead's head: drag to scrub
+                        seekSnapped(down.position.x)
+                        while (true) {
+                            val c = awaitPointerEvent().changes.firstOrNull() ?: break
+                            if (!c.pressed) break
+                            c.consume()
+                            seekSnapped(c.position.x)
+                        }
+                        ed.playheadSnap = null
+                        ed.settle()
+                        return@awaitEachGesture
+                    }
+                    // elsewhere: a drag scrolls the timeline (the playhead and the clips stay put);
+                    // a tap moves the playhead there; a double tap opens a marker (else zooms)
+                    var moved = false
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val c = ev.changes.firstOrNull() ?: break
+                        if (!c.pressed) break
+                        if (!moved && (c.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                        if (moved) {
+                            c.consume()
+                            pan(c.position.x - c.previousPosition.x)
+                        }
+                    }
+                    if (moved) {
+                        lastTap = null
                         return@awaitEachGesture
                     }
                     if (double) {
                         lastTap = null
                         markerAt(down.position)
                     } else {
+                        lastTap = down.uptimeMillis to down.position
                         seekSnapped(down.position.x)
+                        ed.playheadSnap = null
+                        ed.settle()
                     }
-                    var moved = false
-                    while (true) {
-                        val c = awaitPointerEvent().changes.firstOrNull() ?: break
-                        if (!c.pressed) break
-                        if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
-                        if (moved) {
-                            c.consume()
-                            seekSnapped(c.position.x)
-                        }
-                    }
-                    if (!double) lastTap = if (moved) null else down.uptimeMillis to down.position
-                    ed.playheadSnap = null
-                    ed.settle()
                 }
             }
             .semantics { contentDescription = "Timecode ruler" },
@@ -808,6 +845,11 @@ private fun clipMenu(ed: EditorController, c: ProClip, at: Long, key: VolumeKey?
         ed.nestSelection()
     },
     "Open Nested Sequence" to { ed.openNestedOr(c.id) { ed.tell("That clip isn't a nested sequence.") } },
+) + if (c.kind == ClipKind.AUDIO) emptyList() else listOf(
+    "Ken Burns…" to {
+        if (!c.selected) ed.proSelect(c.id)
+        ed.openKenBurns()
+    },
 ) + if (c.kind != ClipKind.AUDIO) emptyList() else listOfNotNull(
     "Add Volume Keyframe Here" to { ed.volumeKey(c.id, at.coerceIn(c.start, c.start + c.duration), levelAt(c, at), from = null) },
     key?.let { k -> "Delete Volume Keyframe" to { ed.deleteVolumeKey(c.id, k.time) } },

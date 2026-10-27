@@ -92,6 +92,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Masks -> clip?.let { MasksPanel(ed, it, close, modifier) }
         Panel.EditText -> TextEditPanel(ed, close, modifier)
         Panel.Markers -> MarkersPanel(ed, close, modifier)
+        Panel.KenBurns -> clip?.let { KenBurnsPanel(ed, it, close, modifier) }
         is Panel.EditTitle -> ed.clipInfo(panel.clip)?.let { TitleEditorPanel(ed, it, close, modifier) }
         is Panel.TextInput -> {}
     }

@@ -55,7 +55,7 @@ object ProHelpText {
         // the timeline bar
         "snap" to ProHelp("Snap in Timeline", "When on, clips, edges and trims stick to nearby cuts, the playhead, In/Out points and markers as you drag.", "S"),
         "linked" to ProHelp("Linked Selection", "When on, selecting a video clip also selects its sound (and the other way round), so they move and trim together.", ""),
-        "addMarker" to ProHelp("Add Marker", "Puts a marker at the playhead; on a marker it edits that one instead (its name, colour, comment, or Delete). On the ruler: tap a marker to go to it, drag it to move it, hold it for its menu (Edit, Go to, Delete, Markers…). Double-tap a marker on the ruler to name it, give it a colour or a comment, or delete it.", "M"),
+        "addMarker" to ProHelp("Add Marker", "Puts a marker at the playhead; on a marker it edits that one instead (its name, colour, comment, or Delete). On the ruler: tap a marker to go to it; hold it, then drag to move it, or let go for its menu (Edit, Go to, Delete, Markers…). A plain drag over a marker just scrubs. Double-tap a marker on the ruler to name it, give it a colour or a comment, or delete it.", "M"),
         "addTracks" to ProHelp("Add Tracks", "Adds a video track above the others, an audio track below them, or one of each.", ""),
         "zoomFit" to ProHelp("Zoom to Sequence", "Zooms the timeline so the whole sequence fits across the screen.", "\\"),
         "markIn" to ProHelp("Mark In", "Sets the In point at the playhead: where the part you're marking starts. Lift, Extract and Insert/Overwrite use it.", "I"),

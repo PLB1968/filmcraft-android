@@ -170,11 +170,10 @@ fun ProEditor(ed: EditorController) {
 
 /**
  * The editor's one top bar: Home; the menus (File, Edit, Clip, Sequence, Graphics, Audio) and the
- * user's Favourites, scrolling between; Undo, Redo and Export.
+ * user's Favourites, scrolling between; Export. (Undo and Redo are on the Tools bar.)
  */
 @Composable
 private fun ProTopBar(ed: EditorController) {
-    val st = ed.status
     Row(Modifier.fillMaxWidth().height(BarHeight).background(Fc.Panel).padding(horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         HelpIconButton(ed, LucideIcons.House.glyph(), "Home", "home", "editor_home_button", iconSize = BarIcon) { ed.closeEditor() }
         Row(
@@ -185,8 +184,6 @@ private fun ProTopBar(ed: EditorController) {
             Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(20.dp).background(Fc.Hairline))
             FavouriteButtons(ed)
         }
-        HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo (hold for the history)", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = BarIcon, onLongClick = { ed.openHistory() }) { ed.undo() }
-        HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = BarIcon) { ed.redo() }
         Box(
             Modifier
                 .padding(start = 2.dp, end = 6.dp)
@@ -231,6 +228,7 @@ private fun ProMenus(ed: EditorController) {
         "Clip" to listOf(
             MenuEntry("Colour…", picked) { ed.openColor() },
             MenuEntry("Motion…", picked) { ed.openMotion() },
+            MenuEntry("Ken Burns…", picked) { ed.openKenBurns() },
             MenuEntry("Masks & Green Screen…", picked) { ed.openMasks() },
         ),
         "Sequence" to listOf(
@@ -769,12 +767,23 @@ private fun ProToolBar(ed: EditorController, vertical: Boolean) {
     if (vertical) {
         Column(Modifier.width(48.dp).fillMaxHeight().background(Fc.Panel).testTag("pro_tool_bar"), horizontalAlignment = Alignment.CenterHorizontally) {
             for (t in shownTools(ed)) ToolButton(ed, t, Modifier.weight(1f).fillMaxWidth())
+            UndoRedo(ed)
         }
     } else {
         Row(Modifier.fillMaxWidth().height(BarHeight).background(Fc.Panel).testTag("pro_tool_bar"), verticalAlignment = Alignment.CenterVertically) {
             for (t in shownTools(ed)) ToolButton(ed, t, Modifier.weight(1f).fillMaxHeight())
+            Box(Modifier.width(1.dp).height(24.dp).background(Fc.Hairline))
+            UndoRedo(ed)
         }
     }
+}
+
+/** Undo (hold for the history) and Redo, at the end of the Tools bar. */
+@Composable
+private fun UndoRedo(ed: EditorController) {
+    val st = ed.status
+    HelpIconButton(ed, LucideIcons.Undo2.glyph(), "Undo (hold for the history)", "undo", "editor_top_bar_undo_button", st?.canUndo == true, iconSize = BarIcon, onLongClick = { ed.openHistory() }) { ed.undo() }
+    HelpIconButton(ed, LucideIcons.Redo2.glyph(), "Redo", "redo", "editor_top_bar_redo_button", st?.canRedo == true, iconSize = BarIcon) { ed.redo() }
 }
 
 /** The tools the user keeps on the Tools bar, in their order. */
