@@ -1532,6 +1532,58 @@ fn markers_move_and_all_clear_in_one_step_each() {
 }
 
 #[test]
+fn sequences_are_made_switched_renamed_copied_nested_and_deleted() {
+    let (m, _d, ids) = two_clips();
+    let first = m.sequences();
+    assert_eq!(first.len(), 1);
+    assert!(first[0].active);
+    // a new upright one, opened and empty
+    let short = m.new_sequence("Short".into(), 1080, 1920).unwrap();
+    let all = m.sequences();
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().any(|e| e.id == short && e.active && e.name == "Short" && e.height == 1920));
+    assert!(m.pro_timeline().unwrap().clips.is_empty());
+    m.rename_sequence(short, "Reel".into()).unwrap();
+    assert!(m.sequences().iter().any(|e| e.name == "Reel"));
+    // the first one, dropped in as one clip (a nest)
+    let v1 = m.pro_timeline().unwrap().video_tracks[0].id;
+    let placed = m.place_item(first[0].id, v1, 0).unwrap();
+    let nest = m.pro_timeline().unwrap().clips.into_iter().find(|c| placed.contains(&c.id) && c.track == v1).expect("the nest");
+    assert_eq!(m.nested_sequence(nest.id), Some(first[0].id));
+    assert!(m.sequences().iter().any(|e| e.id == first[0].id && e.nested));
+    assert!(matches!(m.delete_sequence(first[0].id), Err(MobileError::Command(_))), "it's used in Reel");
+    // back to the first; its two clips nested into one
+    m.open_sequence(first[0].id).unwrap();
+    m.select_clips(vec![ids[0], ids[1]], false).unwrap();
+    let n = m.nest_selection("Both".into()).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert!(t.clips.iter().any(|c| m.nested_sequence(c.id) == Some(n)), "the two clips are one nest now");
+    // a copy, then deleted: the timeline shows another
+    let copy = m.duplicate_sequence(short).unwrap();
+    assert!(m.sequences().iter().any(|e| e.id == copy && e.active && e.name.ends_with("Copy")));
+    m.delete_sequence(copy).unwrap();
+    assert!(m.sequences().iter().all(|e| e.id != copy));
+    assert!(m.sequences().iter().any(|e| e.active));
+}
+
+#[test]
+fn a_clips_picture_or_sound_fades_in_and_out_from_its_corners() {
+    let (m, _d, ids) = two_clips();
+    let c = pclip(&m, ids[0]);
+    m.set_clip_fades(ids[0], SEC / 2, SEC / 4).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let fin = t.transitions.iter().find(|tr| tr.from.is_none() && tr.to == Some(ids[0])).expect("a fade in");
+    let fout = t.transitions.iter().find(|tr| tr.from == Some(ids[0]) && tr.to.is_none()).expect("a fade out");
+    assert_eq!((fin.start, fin.duration), (c.start, SEC / 2));
+    assert_eq!(fout.start + fout.duration, c.start + c.duration);
+    assert!((fout.duration - SEC / 4).abs() <= SEC / 30);
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Fade"));
+    // dragged back to nothing: gone
+    m.set_clip_fades(ids[0], 0, 0).unwrap();
+    assert!(m.pro_timeline().unwrap().transitions.iter().all(|tr| tr.to != Some(ids[0]) && tr.from != Some(ids[0])));
+}
+
+#[test]
 fn a_picture_moved_up_a_track_takes_its_sound_down_one_too() {
     let (m, _d, ids) = two_clips();
     m.add_tracks(1, 0).unwrap();
