@@ -219,6 +219,8 @@ pub struct MobileSession {
     proxies: Mutex<proxy::ProxyQueue>,
     /// Clips moves covered, to bring back when the covering clip moves away.
     covers: Mutex<Vec<covers::Cover>>,
+    /// Photos put on the timeline get a gentle Ken Burns (Settings).
+    auto_burns: std::sync::atomic::AtomicBool,
 }
 
 impl MobileSession {
@@ -229,6 +231,29 @@ impl MobileSession {
     }
 
     /// The proxy queue (taken after the session, never before).
+    /// Run `op` (which puts clips on the timeline and returns them); with Ken Burns on photos on,
+    /// the photos among them get one, in the same undo step `label`.
+    fn with_burns(&self, s: &mut Session, label: &str, op: impl FnOnce(&mut Session) -> Result<Vec<u64>, MobileError>) -> Result<Vec<u64>, MobileError> {
+        if !self.auto_burns.load(std::sync::atomic::Ordering::Relaxed) {
+            return op(s);
+        }
+        let mut failed = None;
+        let r = s.edit_group(label, |s| match op(s) {
+            Ok(ids) => {
+                motion::burn_stills(s, &ids);
+                Ok(ids)
+            }
+            Err(e) => {
+                failed = Some(e);
+                Err(filmcraft_engine::EngineError::Other(String::new()))
+            }
+        });
+        if let Some(e) = failed {
+            return Err(e);
+        }
+        Ok(r?)
+    }
+
     fn covers_mut(&self) -> MutexGuard<'_, Vec<covers::Cover>> {
         self.covers.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -261,6 +286,7 @@ impl Default for MobileSession {
             next_job: AtomicU64::new(1),
             proxies: Mutex::new(proxy::ProxyQueue::default()),
             covers: Mutex::new(Vec::new()),
+            auto_burns: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -482,7 +508,7 @@ impl MobileSession {
 
     /// Add pictures and videos to the main track (sounds go to audio lanes). Returns the new clips.
     pub fn add_media(&self, paths: Vec<String>) -> Result<Vec<u64>, MobileError> {
-        self.main_edit(|s| edits::add_media(s, &paths))
+        self.main_edit(|s| self.with_burns(s, "Add Media", |s| edits::add_media(s, &paths)))
     }
 
     /// Add sound files at the playhead on free audio lanes.
@@ -1175,6 +1201,27 @@ impl MobileSession {
         self.pro_edit(|s| motion::ken_burns(s, clip, kind, amount))
     }
 
+    /// A Ken Burns move on a clip: from one view of its picture to another, over part or all of
+    /// it, eased or even. One undo step.
+    pub fn set_ken_burns(&self, clip: u64, ken_burns: motion::KbMove) -> Result<(), MobileError> {
+        self.pro_edit(|s| motion::set_ken_burns(s, clip, ken_burns))
+    }
+
+    /// What the Ken Burns panel draws for a clip: its picture's and the frame's shapes, its move.
+    pub fn ken_burns_info(&self, clip: u64) -> Result<motion::KbInfo, MobileError> {
+        motion::ken_burns_info(&self.lock(), clip)
+    }
+
+    /// A preset as a move (for the panel to show and edit), varied for `clip` where it varies.
+    pub fn ken_burns_preset(&self, kind: motion::KenBurns, amount: f64, clip: u64) -> Option<motion::KbMove> {
+        motion::preset(kind, amount, clip)
+    }
+
+    /// Photos put on the timeline get a gentle Ken Burns (Settings › Ken Burns on photos).
+    pub fn set_auto_ken_burns(&self, on: bool) {
+        self.auto_burns.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Picture-in-picture: the clip at `size` × the frame's width in a corner.
     pub fn picture_in_picture(&self, clip: u64, corner: motion::Corner, size: f64) -> Result<(), MobileError> {
         self.pro_edit(|s| motion::picture_in_picture(s, clip, corner, size))
@@ -1286,7 +1333,7 @@ impl MobileSession {
     /// Insert (,) or Overwrite (.) the source In to Out at the sequence In or the playhead, on
     /// the patched tracks. Returns the new clips.
     pub fn source_edit(&self, overwrite: bool) -> Result<Vec<u64>, MobileError> {
-        self.pro_edit(|s| pro::source_edit(s, overwrite))
+        self.pro_edit(|s| self.with_burns(s, if overwrite { "Overwrite" } else { "Insert" }, |s| pro::source_edit(s, overwrite)))
     }
 
     /// Lift (;) or Extract (') the sequence In to Out on the targeted tracks.
@@ -1344,13 +1391,13 @@ impl MobileSession {
 
     /// Import files and put them at `time` on `track` (the double-tapped spot), overwriting.
     pub fn place_media(&self, paths: Vec<String>, track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
-        self.pro_edit(|s| pro::place_media(s, &paths, track, time))
+        self.pro_edit(|s| self.with_burns(s, "Add Media", |s| pro::place_media(s, &paths, track, time)))
     }
 
     /// Put project item `item` (its Source In to Out) at `time` on `track`, overwriting: a drag
     /// from the Project panel or the Source monitor dropped on the timeline.
     pub fn place_item(&self, item: u64, track: u64, time: i64) -> Result<Vec<u64>, MobileError> {
-        self.pro_edit(|s| pro::place_item_at(s, item, track, time))
+        self.pro_edit(|s| self.with_burns(s, "Place Clip", |s| pro::place_item_at(s, item, track, time)))
     }
 
     /// A crossfade on the cut after clip `left`: picture and/or sound, `seconds` long.

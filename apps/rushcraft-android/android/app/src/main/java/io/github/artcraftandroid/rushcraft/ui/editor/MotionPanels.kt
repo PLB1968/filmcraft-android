@@ -51,7 +51,6 @@ import io.github.artcraftandroid.rushcraft.core.Anim
 import io.github.artcraftandroid.rushcraft.core.ClipInfo
 import io.github.artcraftandroid.rushcraft.core.Corner
 import io.github.artcraftandroid.rushcraft.core.FieldKind
-import io.github.artcraftandroid.rushcraft.core.KenBurns
 import io.github.artcraftandroid.rushcraft.core.ClipKind
 import io.github.artcraftandroid.rushcraft.core.Ramp
 import io.github.artcraftandroid.rushcraft.core.MaskInfo
@@ -205,7 +204,6 @@ private val ANIMS = listOf(
     Anim.NONE to "None", Anim.FADE to "Fade", Anim.SLIDE_RIGHT to "Slide →", Anim.SLIDE_LEFT to "Slide ←",
     Anim.SLIDE_UP to "Slide ↑", Anim.SLIDE_DOWN to "Slide ↓", Anim.POP to "Pop", Anim.ZOOM to "Zoom", Anim.SPIN to "Spin",
 )
-private val KEN_BURNS = listOf(KenBurns.NONE to "None", KenBurns.ZOOM_IN to "Zoom in", KenBurns.ZOOM_OUT to "Zoom out", KenBurns.PAN_LEFT to "Pan left", KenBurns.PAN_RIGHT to "Pan right")
 private val RAMPS = listOf(Ramp.NONE to "None", Ramp.SLOW_MO_HIT to "Slow-mo hit", Ramp.SPEED_UP_THEN_SLOW to "Speed up, then slow", Ramp.RAMP_IN to "Ramp in", Ramp.RAMP_OUT to "Ramp out")
 private val CORNERS = listOf(Corner.TOP_LEFT to "Top left", Corner.TOP_RIGHT to "Top right", Corner.BOTTOM_LEFT to "Bottom left", Corner.BOTTOM_RIGHT to "Bottom right", Corner.CENTER to "Centre")
 
@@ -224,8 +222,6 @@ fun MotionBody(ed: EditorController, c: ClipInfo, titles: Boolean = false) {
     var enter by remember(c.id) { mutableStateOf(Anim.NONE) }
     var exit by remember(c.id) { mutableStateOf(Anim.NONE) }
     var seconds by remember { mutableDoubleStateOf(0.5) }
-    var burns by remember(c.id) { mutableStateOf(KenBurns.NONE) }
-    var amount by remember { mutableDoubleStateOf(0.2) }
     var corner by remember(c.id) { mutableStateOf<Corner?>(null) }
     var size by remember { mutableDoubleStateOf(0.35) }
     var recording by remember(c.id) { mutableStateOf(false) }
@@ -254,10 +250,10 @@ fun MotionBody(ed: EditorController, c: ClipInfo, titles: Boolean = false) {
             )
         }
         Spacer(Modifier.height(16.dp))
-        Text("Ken Burns", style = FcType.Label, color = Fc.Secondary, modifier = pad)
-        Spacer(Modifier.height(8.dp))
-        ChipRow(KEN_BURNS, burns, "motion_kb") { burns = it; ed.kenBurns(c.id, it, amount) }
-        ValueSlider("Amount", "%.0f %%".format(amount * 100), ((amount - 0.05) / 0.45).toFloat(), { amount = 0.05 + it * 0.45 }, { if (burns != KenBurns.NONE) ed.kenBurns(c.id, burns, amount) })
+        Row(pad.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Ken Burns has its own panel: presets, and start and end views to drag.", style = FcType.BodySmall, color = Fc.Detail, modifier = Modifier.weight(1f).padding(end = 12.dp))
+            SelectChip("Ken Burns…", false, { ed.openKenBurns() }, tag = "motion_kb")
+        }
         Spacer(Modifier.height(16.dp))
         Text("Picture in picture", style = FcType.Label, color = Fc.Secondary, modifier = pad)
         Spacer(Modifier.height(8.dp))
@@ -280,7 +276,7 @@ fun MotionBody(ed: EditorController, c: ClipInfo, titles: Boolean = false) {
 
 /** A row of chips that scrolls sideways. */
 @Composable
-private fun <T> ChipRow(items: List<Pair<T, String>>, selected: T?, tag: String, pick: (T) -> Unit) {
+internal fun <T> ChipRow(items: List<Pair<T, String>>, selected: T?, tag: String, pick: (T) -> Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items.forEachIndexed { i, (v, label) -> SelectChip(label, v == selected, { pick(v) }, tag = "${tag}_$i") }
     }
@@ -288,7 +284,7 @@ private fun <T> ChipRow(items: List<Pair<T, String>>, selected: T?, tag: String,
 
 /** A labelled slider showing its value; [done] when the finger lifts. */
 @Composable
-private fun ValueSlider(label: String, value: String, fraction: Float, change: (Float) -> Unit, done: () -> Unit) {
+internal fun ValueSlider(label: String, value: String, fraction: Float, change: (Float) -> Unit, done: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding).height(44.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = FcType.BodySmall, color = Fc.Body, modifier = Modifier.width(72.dp), maxLines = 1)
         FcSlider(fraction.coerceIn(0f, 1f), change, onDone = done, modifier = Modifier.weight(1f), description = label)

@@ -28,7 +28,7 @@ pub enum Anim {
     Spin,
 }
 
-/// A slow move across a picture over the whole clip.
+/// A slow move across a picture over the whole clip (a preset of [`KbMove`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum KenBurns {
     None,
@@ -37,6 +37,45 @@ pub enum KenBurns {
     /// The view moves left across the picture (the picture drifts right).
     PanLeft,
     PanRight,
+    /// The view moves up the picture.
+    PanUp,
+    PanDown,
+    /// From the top-left corner to the bottom-right.
+    Diagonal,
+    /// From the whole picture into a corner of it.
+    ZoomCorner,
+    /// One of the others, picked by the clip (so a run of photos varies).
+    Random,
+}
+
+/// A Ken Burns view: the part of the picture the frame shows, its centre (`x`, `y`, 0..1 across
+/// and down the picture) and its width (`size`, 0.2..1 of the widest view that fits inside it).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct KbView {
+    pub x: f64,
+    pub y: f64,
+    pub size: f64,
+}
+
+/// A Ken Burns move: from view `start` to view `end`, between `from` and `to` (0..1 of the clip),
+/// eased in and out (`smooth`) or at an even pace.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct KbMove {
+    pub start: KbView,
+    pub end: KbView,
+    pub smooth: bool,
+    pub from: f64,
+    pub to: f64,
+}
+
+/// What the Ken Burns panel draws: the picture's and the frame's shapes, and the clip's move.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct KbInfo {
+    pub picture_w: f64,
+    pub picture_h: f64,
+    pub frame_w: f64,
+    pub frame_h: f64,
+    pub current: Option<KbMove>,
 }
 
 /// Where picture-in-picture puts a clip.
@@ -229,47 +268,160 @@ pub(crate) fn animate(s: &mut Session, id: u64, enter: Anim, exit: Anim, seconds
     })
 }
 
-/// Ken Burns: a slow zoom or pan across clip `id` over its whole length; `amount` is how much
+/// The widest view (frame-shaped) that fits inside the picture, in picture pixels at 100 %.
+fn widest(g: &Geo) -> f64 {
+    let aspect = g.fw / g.fh.max(1.0);
+    if g.w / g.h.max(1.0) > aspect { g.h * aspect } else { g.w }
+}
+
+/// View `v` kept inside the picture: no edge of the picture ever shows.
+fn inside(v: KbView, g: &Geo) -> KbView {
+    let size = if v.size.is_finite() { v.size.clamp(0.2, 1.0) } else { 1.0 };
+    let ww = size * widest(g);
+    let wh = ww * g.fh / g.fw.max(1.0);
+    let hx = (ww / 2.0 / g.w.max(1.0)).min(0.5);
+    let hy = (wh / 2.0 / g.h.max(1.0)).min(0.5);
+    let fin = |a: f64| if a.is_finite() { a } else { 0.5 };
+    KbView { x: fin(v.x).clamp(hx, 1.0 - hx), y: fin(v.y).clamp(hy, 1.0 - hy), size }
+}
+
+/// Motion's scale (%) and position for view `v`.
+fn view_motion(v: KbView, g: &Geo) -> (f64, Vec2) {
+    let s = g.fw / (v.size * widest(g)).max(1.0);
+    (s * 100.0, Vec2::new(g.fw / 2.0 + (0.5 - v.x) * g.w * s, g.fh / 2.0 + (0.5 - v.y) * g.h * s))
+}
+
+/// The view Motion's scale (%) and position show.
+fn motion_view(scale: f64, pos: Vec2, g: &Geo) -> KbView {
+    let s = (scale / 100.0).max(1e-6);
+    KbView { x: 0.5 - (pos.x - g.fw / 2.0) / (g.w * s).max(1.0), y: 0.5 - (pos.y - g.fh / 2.0) / (g.h * s).max(1.0), size: g.fw / s / widest(g).max(1.0) }
+}
+
+/// Preset `kind` as a move `amount` closer in (0.05 to 0.5), varied for clip `seed` (Random,
+/// Zoom Into a Corner).
+pub(crate) fn preset(kind: KenBurns, amount: f64, seed: u64) -> Option<KbMove> {
+    let a = if amount.is_finite() { amount.clamp(0.05, 0.5) } else { 0.15 };
+    let z = 1.0 / (1.0 + a);
+    let v = |x: f64, y: f64, size: f64| KbView { x, y, size };
+    let corner = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)][(seed % 4) as usize];
+    let (start, end) = match kind {
+        KenBurns::None => return None,
+        KenBurns::ZoomIn => (v(0.5, 0.5, 1.0), v(0.5, 0.5, z)),
+        KenBurns::ZoomOut => (v(0.5, 0.5, z), v(0.5, 0.5, 1.0)),
+        KenBurns::PanLeft => (v(1.0, 0.5, z), v(0.0, 0.5, z)),
+        KenBurns::PanRight => (v(0.0, 0.5, z), v(1.0, 0.5, z)),
+        KenBurns::PanUp => (v(0.5, 1.0, z), v(0.5, 0.0, z)),
+        KenBurns::PanDown => (v(0.5, 0.0, z), v(0.5, 1.0, z)),
+        KenBurns::Diagonal => (v(0.0, 0.0, z), v(1.0, 1.0, z)),
+        KenBurns::ZoomCorner => (v(0.5, 0.5, 1.0), v(corner.0, corner.1, z)),
+        KenBurns::Random => {
+            const PICKS: [KenBurns; 8] =
+                [KenBurns::ZoomIn, KenBurns::ZoomOut, KenBurns::PanLeft, KenBurns::PanRight, KenBurns::PanUp, KenBurns::PanDown, KenBurns::Diagonal, KenBurns::ZoomCorner];
+            // a cheap, steady scramble of the seed
+            let h = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(17);
+            return preset(PICKS[(h % 8) as usize], a, h / 8);
+        }
+    };
+    Some(KbMove { start, end, smooth: true, from: 0.0, to: 1.0 })
+}
+
+/// Ken Burns preset `kind` on clip `id` over its whole length, eased; `amount` is how much
 /// further it zooms (0.05 to 0.5). Replaces the clip's position and scale keyframes.
 pub(crate) fn ken_burns(s: &mut Session, id: u64, kind: KenBurns, amount: f64) -> Result<(), MobileError> {
+    match preset(kind, amount, id) {
+        Some(m) => set_ken_burns(s, id, m),
+        None => edit(s, id, "Ken Burns", |c| {
+            for p in ["position", "scale"] {
+                if let Some(prm) = param(c, "motion", p) {
+                    let v = prm.value_at(prm.keyframes.first().map_or(Tick::ZERO, |k| k.time));
+                    prm.keyframes.clear();
+                    prm.value = v;
+                }
+            }
+            Ok(())
+        }),
+    }
+}
+
+/// A gentle Ken Burns (Random, varied by clip) on each of `clips` that is a still with no move of
+/// its own: photos added while Settings › Ken Burns on photos is on.
+pub(crate) fn burn_stills(s: &mut Session, clips: &[u64]) {
+    for &id in clips {
+        let Ok((_, seq)) = model::sequence(s) else { return };
+        let Some(f) = model::find(seq, ClipId(id)) else { continue };
+        let still = f.kind == TrackKind::Video
+            && matches!(s.project.item(f.clip.item).map(|i| &i.kind), Some(filmcraft_project::ItemKind::Media(m)) if m.info.kind == filmcraft_media::MediaKind::Still);
+        let moving = f.clip.effect("motion").and_then(|m| m.param("scale")).is_some_and(Param::is_animated);
+        if still
+            && !moving
+            && let Some(m) = preset(KenBurns::Random, 0.12, id)
+        {
+            let _ = set_ken_burns(s, id, m);
+        }
+    }
+}
+
+/// Move `m` on clip `id`: its views kept inside the picture, keyframed on Motion's scale and
+/// position at its start and end. One undo step.
+pub(crate) fn set_ken_burns(s: &mut Session, id: u64, m: KbMove) -> Result<(), MobileError> {
     let g = geo(s, id)?;
-    let a = if amount.is_finite() { amount.clamp(0.05, 0.5) } else { 0.15 };
+    let (a, b) = (inside(m.start, &g), inside(m.end, &g));
+    let mut from = if m.from.is_finite() { m.from.clamp(0.0, 0.95) } else { 0.0 };
+    let mut to = if m.to.is_finite() { m.to.clamp(0.05, 1.0) } else { 1.0 };
+    if to - from < 0.05 {
+        (from, to) = (from.min(0.95), (from + 0.05).min(1.0));
+    }
+    let (interp, influence) = if m.smooth { (Interpolation::Bezier, 0.6) } else { (Interpolation::Linear, 1.0 / 3.0) };
     edit(s, id, "Ken Burns", |c| {
-        let (m0, m1) = (c.effect_time_at(c.start), c.effect_time_at(c.start + c.duration - g.frame));
-        let Some(m) = c.effect("motion") else { return Ok(()) };
-        let pos = m.param("position").map(|p| pos_at(p, m0, &g)).unwrap_or(Vec2::new(g.fw / 2.0, g.fh / 2.0));
-        let cur = m.param("scale").map_or(100.0, |p| p.f64_at(m0)) / 100.0;
+        let dur = c.duration.0.max(1);
+        let at = |f: f64| {
+            let t = c.start.0 + (dur as f64 * f).round() as i64;
+            c.effect_time_at(Tick(t.min(c.start.0 + dur - g.frame.0).max(c.start.0)))
+        };
+        let (m0, m1) = (at(from), at(to));
         for p in ["position", "scale"] {
             if let Some(prm) = param(c, "motion", p) {
-                let v = prm.value_at(m0);
                 prm.keyframes.clear();
-                prm.value = v;
             }
         }
-        // big enough to fill the frame, so no edge shows as it moves
-        let cover = (g.fw / g.w.max(1.0)).max(g.fh / g.h.max(1.0));
-        let s0 = cur.max(cover);
-        let s1 = s0 * (1.0 + a);
-        let slack = ((g.w * s1 - g.fw) / 2.0).max(0.0);
-        let f = |v: f64| ParamValue::Float(v * 100.0);
-        let at = |x: f64| ParamValue::Vec2(Vec2::new(x, pos.y));
-        let (sc, ps) = match kind {
-            KenBurns::ZoomIn => ((f(s0), f(s1)), None),
-            KenBurns::ZoomOut => ((f(s1), f(s0)), None),
-            KenBurns::PanLeft => ((f(s1), f(s1)), Some((at(pos.x - slack), at(pos.x + slack)))),
-            KenBurns::PanRight => ((f(s1), f(s1)), Some((at(pos.x + slack), at(pos.x - slack)))),
-            KenBurns::None => return Ok(()),
-        };
+        let ((s0, p0), (s1, p1)) = (view_motion(a, &g), view_motion(b, &g));
         if let Some(prm) = param(c, "motion", "scale") {
-            key(prm, m0, sc.0, Interpolation::Linear, 1.0 / 3.0);
-            key(prm, m1, sc.1, Interpolation::Linear, 1.0 / 3.0);
+            key(prm, m0, ParamValue::Float(s0), interp, influence);
+            key(prm, m1, ParamValue::Float(s1), interp, influence);
         }
-        if let (Some((p0, p1)), Some(prm)) = (ps, param(c, "motion", "position")) {
-            key(prm, m0, p0, Interpolation::Linear, 1.0 / 3.0);
-            key(prm, m1, p1, Interpolation::Linear, 1.0 / 3.0);
+        if let Some(prm) = param(c, "motion", "position") {
+            key(prm, m0, ParamValue::Vec2(p0), interp, influence);
+            key(prm, m1, ParamValue::Vec2(p1), interp, influence);
         }
         Ok(())
     })
+}
+
+/// The Ken Burns panel's picture: the shapes, and clip `id`'s move (when its scale is keyed at two
+/// times, as a move leaves it).
+pub(crate) fn ken_burns_info(s: &Session, id: u64) -> Result<KbInfo, MobileError> {
+    let g = geo(s, id)?;
+    let (_, seq) = model::sequence(s)?;
+    let c = model::find(seq, ClipId(id)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?.clip;
+    let current = (|| {
+        let m = c.effect("motion")?;
+        let sc = m.param("scale")?;
+        let [k0, k1] = &sc.keyframes[..] else { return None };
+        let pos = m.param("position");
+        let view = |t: Tick| motion_view(sc.f64_at(t), pos.map(|p| pos_at(p, t, &g)).unwrap_or(Vec2::new(g.fw / 2.0, g.fh / 2.0)), &g);
+        let dur = c.duration.0.max(1) as f64;
+        let frac = |t: Tick| ((crate::pro::sequence_time_of(c, t) - c.start.0) as f64 / dur).clamp(0.0, 1.0);
+        let to = frac(k1.time);
+        Some(KbMove {
+            start: view(k0.time),
+            end: view(k1.time),
+            smooth: k0.interp != Interpolation::Linear,
+            from: frac(k0.time),
+            // the last keyframe sits a frame before the end
+            to: if to > 0.97 { 1.0 } else { to },
+        })
+    })();
+    Ok(KbInfo { picture_w: g.w, picture_h: g.h, frame_w: g.fw, frame_h: g.fh, current })
 }
 
 /// Picture-in-picture: clip `id` at `size` × the frame's width (0.15 to 0.9) in `corner`, a small

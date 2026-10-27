@@ -159,6 +159,13 @@ fun SettingsScreen(vm: AppViewModel) {
             { vm.changeHardwareDecoding(it) },
             tag = "settings_hardware_decoding",
         )
+        SwitchRow(
+            "Ken Burns on photos",
+            "Photos you put on the timeline drift gently, a slow zoom or pan each, varied so they don't all move alike. Change or remove one with Clip › Ken Burns….",
+            vm.autoKenBurns,
+            { vm.changeAutoKenBurns(it) },
+            tag = "settings_auto_ken_burns",
+        )
         Spacer(Modifier.height(8.dp))
         Row48("About RushCraft") { vm.show(Screen.About) }
         StorageSection()

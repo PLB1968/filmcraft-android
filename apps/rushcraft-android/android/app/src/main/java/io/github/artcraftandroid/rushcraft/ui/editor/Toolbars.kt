@@ -71,7 +71,7 @@ enum class ToolbarKind(val title: String, val defaults: List<String>) {
         // the essentials, on one line; the rest of the monitor's buttons are in its ⋯ menu
         listOf("goToStart", "stepBack", "play", "stepForward", "goToEnd", "addMarker", "deleteMarker"),
     ),
-    Tools("Tools", ProTool.entries.map { it.name }),
+    Tools("Tools", BAR_TOOLS),
     Timeline("Timeline", listOf("snap", "linked", "addMarker", "addTracks", "zoomFit")),
     Favourites("Favourites", listOf("titles", "captions", "colour", "editText", "voiceover"));
 
@@ -79,11 +79,14 @@ enum class ToolbarKind(val title: String, val defaults: List<String>) {
     val family: List<String> get() = if (this == Transport) TRANSPORT_FAMILY else emptyList()
 
     /** [id] is a button this bar can hold. */
-    fun knows(id: String): Boolean = if (this == Tools) ProTool.entries.any { it.name == id } else BarCommands.of(id) != null
+    fun knows(id: String): Boolean = if (this == Tools) id in BAR_TOOLS else BarCommands.of(id) != null
 
     /** Every button this bar can hold, in the order the Add list shows them. */
-    val choices: List<String> get() = if (this == Tools) ProTool.entries.map { it.name } else BarCommands.all.map { it.id }
+    val choices: List<String> get() = if (this == Tools) BAR_TOOLS else BarCommands.all.map { it.id }
 }
+
+/** The tools the Tools bar can hold: all but the Hand (a drag on the ruler or on empty track scrolls). */
+private val BAR_TOOLS = ProTool.entries.filter { it != ProTool.Hand }.map { it.name }
 
 private val TRANSPORT_FAMILY = listOf(
     "markIn", "markOut", "goToIn", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "goToOut", "addMarker", "deleteMarker", "prevMarker", "nextMarker",
@@ -253,6 +256,7 @@ object BarCommands {
         BarCommand("history", "Undo History", "Every step to undo; tap one to go back to it.", text = { "History" }, enabled = { it.status?.canUndo == true || it.status?.canRedo == true }) { it.openHistory() },
         BarCommand("editText", "Edit by Text", "Transcribe the sequence, then delete words to cut them, and remove filler words and long pauses.", text = { "Edit by Text" }, enabled = has) { it.openTextEdit() },
         BarCommand("colour", "Colour", "The selected clip's Lumetri colour.", text = { "Colour" }, enabled = picked) { it.openColor() },
+        BarCommand("kenBurns", "Ken Burns", "A slow zoom or pan across the selected photo or video: pick a preset or set its start and end views.", text = { "Ken Burns" }, enabled = picked) { it.openKenBurns() },
         BarCommand("motion", "Motion", "The selected clip's entrance and exit, Ken Burns and picture-in-picture.", text = { "Motion" }, enabled = picked) { it.openMotion() },
         BarCommand("masks", "Masks & Green Screen", "Blur or show only an area, limit an effect to it, or key out a green or blue backdrop.", text = { "Masks" }, enabled = picked) { it.openMasks() },
         BarCommand("aspect", "Aspect Ratio", "The sequence's shape: wide, upright, square…", text = { "Aspect" }) { it.panel = Panel.AspectRatio },

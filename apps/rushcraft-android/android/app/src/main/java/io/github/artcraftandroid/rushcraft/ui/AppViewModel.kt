@@ -92,6 +92,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         editor?.let { ed -> viewModelScope.launch { runCatching { ed.engine.command { setHardwareDecoding(on) } } } }
     }
 
+    /** Settings › Ken Burns on photos: photos put on the timeline drift gently by themselves. */
+    var autoKenBurns by mutableStateOf(prefs.autoKenBurns)
+        private set
+
+    fun changeAutoKenBurns(on: Boolean) {
+        autoKenBurns = on
+        prefs.autoKenBurns = on
+        editor?.let { ed -> viewModelScope.launch { runCatching { ed.engine.command { setAutoKenBurns(on) } } } }
+    }
+
     var screen by mutableStateOf(Screen.Home)
         private set
     var projectList by mutableStateOf<List<ProjectEntry>>(emptyList())

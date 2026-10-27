@@ -27,6 +27,11 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(AUTO_RENDER, true)
         set(v) = prefs.edit().putBoolean(AUTO_RENDER, v).apply()
 
+    /** Photos put on the timeline get a gentle Ken Burns (Settings › Ken Burns on photos). */
+    var autoKenBurns: Boolean
+        get() = prefs.getBoolean(AUTO_KEN_BURNS, true)
+        set(v) = prefs.edit().putBoolean(AUTO_KEN_BURNS, v).apply()
+
     /** Edit by Text stays open under the timeline (closed with its X). */
     var textDock: Boolean
         get() = prefs.getBoolean(TEXT_DOCK, false)
@@ -46,5 +51,6 @@ class AppPrefs(context: Context) {
         const val AUTO_RENDER = "autoRender"
         const val TOOLBAR = "toolbar."
         const val TEXT_DOCK = "textDock"
+        const val AUTO_KEN_BURNS = "autoKenBurns"
     }
 }

@@ -131,6 +131,8 @@ sealed interface Panel {
     data object Masks : Panel
     /** Pro mode: Edit by Text, the sequence's transcript. */
     data object EditText : Panel
+    /** Pro mode: the selected clip's Ken Burns move (start and end views, presets, pace). */
+    data object KenBurns : Panel
     /** Pro mode: the sequence's markers, to go to, edit or delete. */
     data object Markers : Panel
 }
@@ -290,6 +292,7 @@ class EditorController(
         engine.command {
             setUseProxies(useProxies)
             setHardwareDecoding(prefs?.hardwareDecoding ?: true)
+            setAutoKenBurns(prefs?.autoKenBurns ?: true)
         }
         newRenderer()
         if (fresh) save()
@@ -1864,6 +1867,22 @@ class EditorController(
     fun animateClip(clip: ULong, enter: Anim, exit: Anim, seconds: Double) = edit { animateClip(clip, enter, exit, seconds) }
 
     fun kenBurns(clip: ULong, kind: KenBurns, amount: Double) = edit { kenBurns(clip, kind, amount) }
+
+    /** A Ken Burns move on clip [clip], from one view of its picture to another. */
+    fun setKenBurns(clip: ULong, move: io.github.artcraftandroid.rushcraft.core.KbMove) = edit { setKenBurns(clip, move) }
+
+    /** What the Ken Burns panel draws for clip [clip] (null: it has no picture). */
+    suspend fun kenBurnsInfo(clip: ULong): io.github.artcraftandroid.rushcraft.core.KbInfo? = runCatching { engine.command { kenBurnsInfo(clip) } }.getOrNull()
+
+    /** Preset [kind] as a move to show in the panel (null: None). */
+    suspend fun kenBurnsPreset(kind: KenBurns, amount: Double, clip: ULong): io.github.artcraftandroid.rushcraft.core.KbMove? =
+        runCatching { engine.command { kenBurnsPreset(kind, amount, clip) } }.getOrNull()
+
+    fun openKenBurns() {
+        val c = selectedClip
+        if (c == null || c.kind == ClipKind.AUDIO || c.kind == ClipKind.MISSING) return host.tell("Select a photo or video clip first.")
+        panel = Panel.KenBurns
+    }
 
     /** A speed ramp on video clip [clip]; its sound is muted while the ramp is on (it can't follow). */
     fun speedRamp(clip: ULong, ramp: io.github.artcraftandroid.rushcraft.core.Ramp) {
