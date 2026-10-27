@@ -481,7 +481,7 @@ class EditorController(
         private set
 
     /** A sequence action that changes which one the timeline shows: then the whole timeline is read again. */
-    private fun switching(block: suspend MobileSession.() -> Unit) {
+    private fun switching(block: MobileSession.() -> Unit) {
         stop()
         scope.launch {
             try {
