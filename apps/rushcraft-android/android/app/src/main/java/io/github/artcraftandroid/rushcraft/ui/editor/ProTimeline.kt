@@ -362,6 +362,13 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
     }
 }
 
+/** How far below a track's top the corner fade handles sit. */
+private val FADE_HANDLE_Y = 9.dp
+
+/** Clip [c]'s fade in and fade out lengths (0: none): its one-sided transitions at each end. */
+private fun fadesOf(p: ProTimeline, c: ProClip): Pair<Long, Long> =
+    (p.transitions.firstOrNull { it.from == null && it.to == c.id }?.duration ?: 0L) to (p.transitions.firstOrNull { it.to == null && it.from == c.id }?.duration ?: 0L)
+
 private fun inOutLabel(p: ProTimeline): String {
     val i = p.markIn
     val o = p.markOut
@@ -789,6 +796,11 @@ private fun clipMenu(ed: EditorController, c: ProClip, at: Long, key: VolumeKey?
     },
     (if (c.selected) "Deselect" else "Add to Selection") to { ed.proSelect(c.id, add = true) },
     "Add Marker at Playhead" to { ed.addMarker() },
+    "Nest" to {
+        if (!c.selected) ed.proSelect(c.id)
+        ed.nestSelection()
+    },
+    "Open Nested Sequence" to { ed.openNestedOr(c.id) { ed.tell("That clip isn't a nested sequence.") } },
 ) + if (c.kind != ClipKind.AUDIO) emptyList() else listOfNotNull(
     "Add Volume Keyframe Here" to { ed.volumeKey(c.id, at.coerceIn(c.start, c.start + c.duration), levelAt(c, at), from = null) },
     key?.let { k -> "Delete Volume Keyframe" to { ed.deleteVolumeKey(c.id, k.time) } },
@@ -1071,6 +1083,8 @@ private fun Tracks(
     var dragY0 by remember { mutableFloatStateOf(0f) }
     // a crossfade or fade being dragged: where it would go
     var bandDrag by remember { mutableStateOf<BandDrag?>(null) }
+    // a selected clip's corner fade handle being dragged: the clip, its head (else its tail), the length
+    var fadeDrag by remember { mutableStateOf<Triple<ULong, Boolean, Long>?>(null) }
     // the gesture reads these as they are now, not as they were when it began
     val pNow by rememberUpdatedState(p)
     val rowsNow by rememberUpdatedState(rows)
@@ -1085,6 +1099,21 @@ private fun Tracks(
     val edgeZone = with(density) { 18.dp.toPx() }
 
     fun rowAt(rows: List<ProRow>, y: Float) = rows.firstOrNull { y >= it.top && y < it.bottom }
+
+    /** A selected clip's corner fade handle under the finger (x, y in the track stack): the clip, and its head (else its tail). */
+    fun fadeHandleAt(p: ProTimeline, x: Float, y: Float): Pair<ProClip, Boolean>? = with(density) {
+        val reach = 18.dp.toPx()
+        for (r in rowsNow) {
+            // (low enough on the clip, its edges still trim)
+            if (r.track.locked || r.height < 24.dp.toPx() || abs(y - (r.top + FADE_HANDLE_Y.toPx())) > 12.dp.toPx()) continue
+            for (c in p.clips.filter { it.selected && it.track == r.track.id }) {
+                val (fi, fo) = fadesOf(p, c)
+                if (abs(x - xAt(c.start + fi)) <= reach) return Pair(c, true)
+                if (abs(x - xAt(c.start + c.duration - fo)) <= reach) return Pair(c, false)
+            }
+        }
+        null
+    }
 
     /** A picture dragged above the top track, or a sound below the last: it goes on a new track. */
     fun wantsNewTrack(rows: List<ProRow>, c: ProClip, y: Float): Boolean {
@@ -1365,7 +1394,15 @@ private fun Tracks(
                             lastTap = null
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             // on a title: edit it; elsewhere: add media there
-                            if (hit != null && hit.kind == ClipKind.TEXT) ed.openTitleEditor(hit.id) else addMediaAt(down.position, hitRow.track, frameAt(x))
+                            // on a title: edit it; on a nest: open its sequence; elsewhere: add media there
+                            val at = down.position
+                            val track = hitRow.track
+                            val t = frameAt(x)
+                            when {
+                                hit != null && hit.kind == ClipKind.TEXT -> ed.openTitleEditor(hit.id)
+                                hit != null -> ed.openNestedOr(hit.id) { addMediaAt(at, track, t) }
+                                else -> addMediaAt(at, track, t)
+                            }
                         } else {
                             lastTap = down.uptimeMillis to down.position
                             when (ed.proTool) {
@@ -1396,6 +1433,32 @@ private fun Tracks(
                             }
                         }
                         else -> {
+                            // a selected clip's corner fade handle: drag it in to fade the picture (or the
+                            // sound) in or out
+                            val handle = if (!multi) fadeHandleAt(p0, x, stackY) else null
+                            if (handle != null) {
+                                val (c, head) = handle
+                                val (fi, fo) = fadesOf(p0, c)
+                                val was = if (head) fi else fo
+                                val room = (c.duration - if (head) fo else fi).coerceAtLeast(0L)
+                                var dx = 0f
+                                fadeDrag = Triple(c.id, head, was)
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    val ch = ev.changes.firstOrNull { it.pressed } ?: break
+                                    dx += ch.positionChange().x
+                                    ev.changes.forEach { it.consume() }
+                                    val dt = (dx / ppsNow() * TPS).roundToLong() * (if (head) 1 else -1)
+                                    fadeDrag = Triple(c.id, head, TimelineMath.snap(was + dt, p0.rateNum, p0.rateDen).coerceIn(0L, room))
+                                }
+                                val len = fadeDrag?.third
+                                fadeDrag = null
+                                if (len != null && len != was) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    ed.setClipFades(c.id, if (head) len else fi, if (head) fo else len)
+                                }
+                                return@awaitEachGesture
+                            }
                             // a crossfade or fade under the finger (Selection tool): its edges change its
                             // length, its middle where it sits on the cut
                             val band = if (!multi && ed.proTool == ProTool.Selection && hitRow != null && !hitRow.track.locked) {
@@ -1595,6 +1658,9 @@ private fun Tracks(
             // crossfades and fades: a light band over the cut, with their ramps and a keyframe at each
             // end (a crossfade: the outgoing clip ramps down as the incoming one ramps up)
             for (tr0 in p.transitions) {
+                // the fade whose handle is being dragged is drawn from the handle instead
+                val fd = fadeDrag
+                if (fd != null && ((fd.second && tr0.from == null && tr0.to == fd.first) || (!fd.second && tr0.to == null && tr0.from == fd.first))) continue
                 // the one being dragged is drawn where it would go
                 val tr = bandDrag?.takeIf { it.id == tr0.id }?.let { b -> tr0.copy(start = b.start, duration = b.duration) } ?: tr0
                 val r = rowOf[tr.track] ?: continue
@@ -1619,6 +1685,47 @@ private fun Tracks(
                     drawKeyframe(Offset(x1, bottom), "linear", ramp, radius = dot)
                 }
                 if (picked) drawRect(Color.White, Offset(x0, top), Size(max(2f, x1 - x0), bottom - top), style = Stroke(2.dp.toPx()))
+            }
+            // selected clips' corner fade handles (and a fade being dragged, with its length)
+            for (c in p.clips.filter { it.selected }) {
+                val r = rowOf[c.track] ?: continue
+                if (r.track.locked || r.height < 24.dp.toPx()) continue
+                val fd = fadeDrag?.takeIf { it.first == c.id }
+                var (fi, fo) = fadesOf(p, c)
+                if (fd != null) if (fd.second) fi = fd.third else fo = fd.third
+                val x0 = xOf(c.start)
+                val x1 = xOf(c.start + c.duration)
+                if (x1 < 0f || x0 > w) continue
+                val top = r.top + 2.dp.toPx()
+                val bottom = r.bottom - 2.dp.toPx()
+                val shade = Color.Black.copy(alpha = 0.4f)
+                val ramp = Color.White.copy(alpha = 0.9f)
+                if (fd != null) {
+                    // the faded part darkened above its ramp
+                    if (fi > 0L) {
+                        val xi = xOf(c.start + fi)
+                        drawPath(Path().apply { moveTo(x0, top); lineTo(xi, top); lineTo(x0, bottom); close() }, shade)
+                        drawLine(ramp, Offset(x0, bottom), Offset(xi, top), 1.5.dp.toPx())
+                    }
+                    if (fo > 0L) {
+                        val xo = xOf(c.start + c.duration - fo)
+                        drawPath(Path().apply { moveTo(x1, top); lineTo(xo, top); lineTo(x1, bottom); close() }, shade)
+                        drawLine(ramp, Offset(xo, top), Offset(x1, bottom), 1.5.dp.toPx())
+                    }
+                    val len = fd.third
+                    val label = measurer.measure("%.2f s".format(len.toDouble() / TPS), TextStyle(fontFamily = Inter, fontSize = 11.sp, color = Color.Black, fontFeatureSettings = "tnum"))
+                    val hx = if (fd.second) xOf(c.start + fi) else xOf(c.start + c.duration - fo)
+                    val pad = 4.dp.toPx()
+                    val bx = (hx - label.size.width / 2f - pad).coerceIn(0f, w - label.size.width - pad * 2)
+                    val by = (top - label.size.height - pad * 2).coerceAtLeast(r.top - label.size.height - pad)
+                    drawRoundRect(Color.White, Offset(bx, by), Size(label.size.width + pad * 2, label.size.height + pad), CornerRadius(pad, pad))
+                    drawText(label, topLeft = Offset(bx + pad, by + pad / 2))
+                }
+                val hy = r.top + FADE_HANDLE_Y.toPx()
+                for (hx in listOf(xOf(c.start + fi), xOf(c.start + c.duration - fo))) {
+                    drawCircle(Color.Black, radius = 7.dp.toPx(), center = Offset(hx, hy))
+                    drawCircle(Color.White, radius = 5.dp.toPx(), center = Offset(hx, hy))
+                }
             }
             // locked tracks: hatched
             for (r in rows.filter { it.track.locked }) {

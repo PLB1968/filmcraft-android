@@ -234,6 +234,8 @@ private fun ProMenus(ed: EditorController) {
             MenuEntry("Masks & Green Screen…", picked) { ed.openMasks() },
         ),
         "Sequence" to listOf(
+            MenuEntry("New Sequence…") { ed.newSequenceAsked = true },
+            MenuEntry("Nest Selected Clips", picked) { ed.nestSelection() },
             MenuEntry("Aspect Ratio…") { ed.panel = Panel.AspectRatio },
             MenuEntry("Markers…", ed.pro?.markers?.isNotEmpty() == true) { ed.panel = Panel.Markers },
             MenuEntry("Scene Edit Detection", has) { ed.detectScenes() },
@@ -399,9 +401,18 @@ private fun PortraitLayout(ed: EditorController) {
     }
 }
 
-/** The timeline, with Edit by Text docked under it while it's open (drag the line between to resize). */
+/** The sequence tabs, then the timeline (with Edit by Text docked under it while it's open). */
 @Composable
 private fun TimelineAndText(ed: EditorController, compact: Boolean, modifier: Modifier) {
+    Column(modifier) {
+        SequenceTabs(ed)
+        TimelineAndTextBody(ed, compact, Modifier.fillMaxWidth().weight(1f))
+    }
+}
+
+/** The timeline, with Edit by Text docked under it while it's open (drag the line between to resize). */
+@Composable
+private fun TimelineAndTextBody(ed: EditorController, compact: Boolean, modifier: Modifier) {
     if (!ed.textDock) {
         ProTimelinePanel(ed, compact = compact, modifier = modifier)
         return
@@ -648,12 +659,14 @@ private fun ProjectPanel(ed: EditorController, modifier: Modifier) {
         }
         val items = ed.bin
         if (items.isEmpty()) {
+            ProjectSequences(ed)
             Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
                 Text("Import media to see it here", style = FcType.BodySmall, color = Fc.Detail)
             }
             return@Column
         }
         LazyColumn(Modifier.fillMaxSize()) {
+            item(key = "sequences") { ProjectSequences(ed) }
             items(items, key = { it.id.toLong() }) { b ->
                 val open = ed.source?.item == b.id
                 Box {

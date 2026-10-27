@@ -471,7 +471,65 @@ class EditorController(
         bin = runCatching { engine.command { projectBin() } }.getOrDefault(emptyList())
         source = runCatching { engine.command { sourceInfo() } }.getOrNull()
         if (source == null) sourcePicture = null
+        sequences = runCatching { engine.command { sequences() } }.getOrDefault(emptyList())
     }
+
+    // ---- sequences: the project's timelines, and nests ----
+
+    /** The project's sequences (tabs over the timeline, and the Project panel). */
+    var sequences by mutableStateOf<List<io.github.artcraftandroid.rushcraft.core.SequenceEntry>>(emptyList())
+        private set
+
+    /** A sequence action that changes which one the timeline shows: then the whole timeline is read again. */
+    private fun switching(block: MobileSession.() -> Unit) {
+        stop()
+        scope.launch {
+            try {
+                engine.command { block() }
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            pickedEdge = null
+            proTransition = null
+            refresh()
+            newRenderer()
+            requestFrame(playhead, draft = false)
+            scheduleSave()
+        }
+    }
+
+    fun openSequence(id: ULong) {
+        if (sequences.firstOrNull { it.active }?.id == id) return
+        switching { openSequence(id) }
+    }
+
+    fun newSequence(name: String, width: Int, height: Int) = switching { newSequence(name, width.toUInt(), height.toUInt()) }
+    fun renameSequence(id: ULong, name: String) = edit { renameSequence(id, name) }
+    fun duplicateSequence(id: ULong) = switching { duplicateSequence(id) }
+    fun deleteSequence(id: ULong) = switching { deleteSequence(id) }
+
+    /** The selected clips become one clip, a nest (a sequence of their own, opened by a double tap). */
+    fun nestSelection() {
+        if (proSelection.isEmpty()) return host.tell("Select the clips to nest first.")
+        edit { nestSelection("") }
+    }
+
+    /** Open the sequence nest clip [clip] plays (a double tap on it); [orElse] when it isn't one. */
+    fun openNestedOr(clip: ULong, orElse: () -> Unit) {
+        scope.launch {
+            val id = runCatching { engine.command { nestedSequence(clip) } }.getOrNull()
+            if (id != null) openSequence(id) else orElse()
+        }
+    }
+
+    /** Show the user a short message. */
+    fun tell(message: String) = host.tell(message)
+
+    /** The New Sequence dialog is asked for (Sequence ▸ New Sequence…). */
+    var newSequenceAsked by mutableStateOf(false)
+
+    /** Fade clip [clip]'s picture or sound in and out by these lengths (ticks; 0: none). */
+    fun setClipFades(clip: ULong, fadeIn: Long, fadeOut: Long) = edit { setClipFades(clip, fadeIn, fadeOut) }
 
     private fun scheduleSave() {
         saveJob?.cancel()

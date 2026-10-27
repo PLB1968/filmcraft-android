@@ -38,6 +38,7 @@ pub mod proxy;
 pub mod render;
 pub mod renders;
 pub mod samples;
+pub mod sequences;
 pub mod speech;
 pub mod starters;
 pub mod text;
@@ -632,6 +633,52 @@ impl MobileSession {
 
     pub fn set_muted(&self, clip: u64, muted: bool) -> Result<(), MobileError> {
         edits::set_muted(&mut self.lock(), clip, muted)
+    }
+
+    /// Fade a clip's picture (opacity) or sound in and out by these lengths (0: none): the
+    /// timeline's corner fade handles. One undo step.
+    pub fn set_clip_fades(&self, clip: u64, fade_in: i64, fade_out: i64) -> Result<(), MobileError> {
+        self.pro_edit(|s| edits::set_clip_fades(s, clip, fade_in, fade_out))
+    }
+
+    // ---- sequences ----
+
+    /// The project's sequences, oldest first.
+    pub fn sequences(&self) -> Vec<sequences::SequenceEntry> {
+        sequences::list(&self.lock())
+    }
+
+    /// Show sequence `id` in the timeline.
+    pub fn open_sequence(&self, id: u64) -> Result<(), MobileError> {
+        sequences::open(&mut self.lock(), id)
+    }
+
+    /// A new empty sequence of `width` × `height`, opened; returns it.
+    pub fn new_sequence(&self, name: String, width: u32, height: u32) -> Result<u64, MobileError> {
+        sequences::create(&mut self.lock(), &name, width, height)
+    }
+
+    pub fn rename_sequence(&self, id: u64, name: String) -> Result<(), MobileError> {
+        sequences::rename(&mut self.lock(), id, &name)
+    }
+
+    /// A copy of a sequence, opened; returns it.
+    pub fn duplicate_sequence(&self, id: u64) -> Result<u64, MobileError> {
+        sequences::duplicate(&mut self.lock(), id)
+    }
+
+    pub fn delete_sequence(&self, id: u64) -> Result<(), MobileError> {
+        sequences::delete(&mut self.lock(), id)
+    }
+
+    /// Nest the selected clips into a new sequence, in their place; returns it.
+    pub fn nest_selection(&self, name: String) -> Result<u64, MobileError> {
+        self.pro_edit(|s| sequences::nest(s, &name))
+    }
+
+    /// The sequence clip `clip` plays, when it's a nest.
+    pub fn nested_sequence(&self, clip: u64) -> Option<u64> {
+        sequences::nested_in(&self.lock(), clip)
     }
 
     pub fn set_fades(&self, clip: u64, fade_in: i64, fade_out: i64) -> Result<(), MobileError> {

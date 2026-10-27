@@ -558,6 +558,42 @@ pub(crate) fn set_fades(s: &mut Session, id: u64, fade_in: i64, fade_out: i64) -
     Ok(())
 }
 
+/// Fade clip `id` in over `fade_in` and out over `fade_out` ticks (0: none), its picture
+/// (opacity, a one-sided Cross Dissolve) or its sound (a one-sided Constant Power), whichever it
+/// is; frame-exact, together at most its length. One undo step.
+pub(crate) fn set_clip_fades(s: &mut Session, id: u64, fade_in: i64, fade_out: i64) -> Result<(), MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let f = model::find(seq, ClipId(id)).ok_or_else(|| MobileError::Command("That clip is no longer on the timeline.".into()))?;
+    let video = f.kind == filmcraft_project::TrackKind::Video;
+    let a = f.clip.clone();
+    let rate = s.sequence_rate();
+    let clamp = |t: i64| rate.snap(Tick(t.clamp(0, a.duration.0)));
+    let (fi, fo) = (clamp(fade_in), clamp(fade_out));
+    let (fi, fo) = if fi + fo > a.duration { (Tick(a.duration.0 / 2), Tick(a.duration.0 - a.duration.0 / 2)) } else { (fi, fo) };
+    let effect_id = if video { "cross_dissolve" } else { "constant_power" };
+    s.edit_sequence("Fade", |q, ctx, _| {
+        let track = q.video_tracks.iter().chain(&q.audio_tracks).find(|t| t.items.iter().any(|c| c.id == a.id)).map(|t| t.id).ok_or_else(|| other("clip gone"))?;
+        if let Some(t) = q.track_mut(track) {
+            t.transitions.retain(|tr| !(tr.from.is_none() && tr.to == Some(a.id)) && !(tr.from == Some(a.id) && tr.to.is_none()));
+        }
+        let fade = |id: u64, start: Tick, dur: Tick, from, to| -> filmcraft_engine::Result<Transition> {
+            let effect = filmcraft_project::find_effect(effect_id).ok_or_else(|| other("no fade"))?.instance();
+            Ok(Transition { id: TransitionId(id), effect, start, duration: dur, from, to, align: Default::default(), reverse: false })
+        };
+        if fi > Tick::ZERO {
+            let id = alloc(ctx);
+            filmcraft_edit::add_transition(q, track, fade(id, a.start, fi, None, Some(a.id))?, ctx)?;
+        }
+        if fo > Tick::ZERO {
+            let id = alloc(ctx);
+            filmcraft_edit::add_transition(q, track, fade(id, a.end() - fo, fo, Some(a.id), None)?, ctx)?;
+        }
+        Ok(())
+    })?;
+    settle(s);
+    Ok(())
+}
+
 fn alloc(ctx: &mut filmcraft_edit::EditCtx) -> u64 {
     let id = *ctx.next_id;
     *ctx.next_id += 1;
