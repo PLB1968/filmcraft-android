@@ -528,8 +528,8 @@ class EditorController(
     /** The New Sequence dialog is asked for (Sequence ▸ New Sequence…). */
     var newSequenceAsked by mutableStateOf(false)
 
-    /** Fade clip [clip]'s picture or sound in and out by these lengths (ticks; 0: none). */
-    fun setClipFades(clip: ULong, fadeIn: Long, fadeOut: Long) = edit { setClipFades(clip, fadeIn, fadeOut) }
+    /** Fade clip [clip]'s picture or sound in ([head]) or out with [fade] (its linked partners too with Linked Selection on). */
+    fun setFade(clip: ULong, head: Boolean, fade: io.github.artcraftandroid.rushcraft.core.Fade) = edit { setFade(clip, head, fade) }
 
     private fun scheduleSave() {
         saveJob?.cancel()

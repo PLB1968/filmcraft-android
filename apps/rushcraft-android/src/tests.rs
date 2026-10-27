@@ -1567,20 +1567,30 @@ fn sequences_are_made_switched_renamed_copied_nested_and_deleted() {
 }
 
 #[test]
-fn a_clips_picture_or_sound_fades_in_and_out_from_its_corners() {
+fn a_fade_is_keyframes_with_a_middle_one_that_bends_it_and_the_linked_sound_follows() {
     let (m, _d, ids) = two_clips();
     let c = pclip(&m, ids[0]);
-    m.set_clip_fades(ids[0], SEC / 2, SEC / 4).unwrap();
-    let t = m.pro_timeline().unwrap();
-    let fin = t.transitions.iter().find(|tr| tr.from.is_none() && tr.to == Some(ids[0])).expect("a fade in");
-    let fout = t.transitions.iter().find(|tr| tr.from == Some(ids[0]) && tr.to.is_none()).expect("a fade out");
-    assert_eq!((fin.start, fin.duration), (c.start, SEC / 2));
-    assert_eq!(fout.start + fout.duration, c.start + c.duration);
-    assert!((fout.duration - SEC / 4).abs() <= SEC / 30);
-    assert_eq!(m.poll().undo_label.as_deref(), Some("Fade"));
-    // dragged back to nothing: gone
-    m.set_clip_fades(ids[0], 0, 0).unwrap();
-    assert!(m.pro_timeline().unwrap().transitions.iter().all(|tr| tr.to != Some(ids[0]) && tr.from != Some(ids[0])));
+    let sound = |m: &MobileSession| m.pro_timeline().unwrap().clips.into_iter().find(|x| x.link == c.link && x.id != ids[0]).expect("its sound");
+    // a fade in half a second long, its middle keyframe a quarter in and a quarter up
+    let f = fades::Fade { length: SEC / 2, mid_at: 0.25, mid_level: 0.25 };
+    m.set_fade(ids[0], true, f).unwrap();
+    let got = pclip(&m, ids[0]).fade_in.expect("a fade in");
+    assert!((got.length - SEC / 2).abs() <= SEC / 30, "{}", got.length);
+    assert!((got.mid_at - 0.25).abs() < 0.05 && (got.mid_level - 0.25).abs() < 0.05, "{got:?}");
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Fade In"));
+    // Linked Selection on: the sound fades the same (its level in dB, the same shape)
+    let s = sound(&m).fade_in.expect("the sound fades in too");
+    assert!((s.length - got.length).abs() <= SEC / 30 && (s.mid_level - 0.25).abs() < 0.05, "{s:?}");
+    // a fade out, then the middle moved: the length stays
+    m.set_fade(ids[0], false, fades::Fade { length: SEC / 4, mid_at: 0.5, mid_level: 0.5 }).unwrap();
+    m.set_fade(ids[0], false, fades::Fade { length: SEC / 4, mid_at: 0.8, mid_level: 0.9 }).unwrap();
+    let out = pclip(&m, ids[0]).fade_out.expect("a fade out");
+    assert!((out.mid_at - 0.8).abs() < 0.05 && (out.mid_level - 0.9).abs() < 0.05, "{out:?}");
+    assert!(pclip(&m, ids[0]).fade_in.is_some(), "the fade in stays");
+    // dragged back to nothing: gone, both ends of the picture and the sound
+    m.set_fade(ids[0], true, fades::Fade { length: 0, mid_at: 0.5, mid_level: 0.5 }).unwrap();
+    assert!(pclip(&m, ids[0]).fade_in.is_none());
+    assert!(sound(&m).fade_in.is_none());
 }
 
 #[test]
