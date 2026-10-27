@@ -28,6 +28,7 @@ pub mod covers;
 pub mod edits;
 pub mod masks;
 pub mod export;
+pub mod fades;
 mod mediacodec;
 pub mod model;
 pub mod motion;
@@ -635,10 +636,11 @@ impl MobileSession {
         edits::set_muted(&mut self.lock(), clip, muted)
     }
 
-    /// Fade a clip's picture (opacity) or sound in and out by these lengths (0: none): the
-    /// timeline's corner fade handles. One undo step.
-    pub fn set_clip_fades(&self, clip: u64, fade_in: i64, fade_out: i64) -> Result<(), MobileError> {
-        self.pro_edit(|s| edits::set_clip_fades(s, clip, fade_in, fade_out))
+    /// Fade a clip's picture (opacity) or sound in (`head`) or out with `fade` (a length of 0:
+    /// none), its linked partners too with Linked Selection on: the timeline's corner fade
+    /// handles and their middle keyframe. One undo step.
+    pub fn set_fade(&self, clip: u64, head: bool, fade: fades::Fade) -> Result<(), MobileError> {
+        self.pro_edit(|s| fades::set_fade(s, clip, head, fade))
     }
 
     // ---- sequences ----

@@ -70,6 +70,9 @@ pub struct ProClip {
     pub level_db: f64,
     /// Its Volume keyframes on the sequence (the timeline's volume line), oldest first.
     pub volume_keys: Vec<VolumeKey>,
+    /// Its fade in and fade out (keyframes of its Opacity, or of its Volume for a sound).
+    pub fade_in: Option<crate::fades::Fade>,
+    pub fade_out: Option<crate::fades::Fade>,
 }
 
 /// A Volume keyframe: where on the sequence and how loud (dB).
@@ -204,6 +207,8 @@ fn clips_of(s: &Session, seq: &Sequence) -> Vec<ProClip> {
                     keyframes: keyframe_times(c),
                     level_db: volume_of(c).0,
                     volume_keys: volume_of(c).1,
+                    fade_in: crate::fades::fade_of(c, kind == TrackKind::Video, true),
+                    fade_out: crate::fades::fade_of(c, kind == TrackKind::Video, false),
                 });
             }
         }
@@ -949,7 +954,7 @@ fn interp_name(i: filmcraft_project::Interpolation) -> &'static str {
 }
 
 /// Sequence time of media time `mt` in clip `c` (the inverse of `source_time_at`).
-fn sequence_time_of(c: &TrackItem, mt: Tick) -> i64 {
+pub(crate) fn sequence_time_of(c: &TrackItem, mt: Tick) -> i64 {
     let speed = if c.speed.abs() > 1e-9 { c.speed.abs() } else { 1.0 };
     let rel = if c.reverse {
         let full = (c.duration.0 as f64 * speed).round();

@@ -79,6 +79,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.artcraftandroid.rushcraft.core.ClipKind
+import io.github.artcraftandroid.rushcraft.core.Fade
 import io.github.artcraftandroid.rushcraft.core.ProClip
 import io.github.artcraftandroid.rushcraft.core.VolumeKey
 import io.github.artcraftandroid.rushcraft.core.ProMarker
@@ -365,9 +366,15 @@ fun ProTimelinePanel(ed: EditorController, compact: Boolean, modifier: Modifier 
 /** How far below a track's top the corner fade handles sit. */
 private val FADE_HANDLE_Y = 9.dp
 
-/** Clip [c]'s fade in and fade out lengths (0: none): its one-sided transitions at each end. */
-private fun fadesOf(p: ProTimeline, c: ProClip): Pair<Long, Long> =
-    (p.transitions.firstOrNull { it.from == null && it.to == c.id }?.duration ?: 0L) to (p.transitions.firstOrNull { it.to == null && it.from == c.id }?.duration ?: 0L)
+/** Clip [c]'s fade at its head (else its tail): its keyframed fade, else (from 0.0.22) a one-sided transition, as a straight ramp. */
+private fun fadeOf(p: ProTimeline, c: ProClip, head: Boolean): Fade {
+    (if (head) c.fadeIn else c.fadeOut)?.let { return it }
+    val len = if (head) p.transitions.firstOrNull { it.from == null && it.to == c.id }?.duration else p.transitions.firstOrNull { it.to == null && it.from == c.id }?.duration
+    return Fade(len ?: 0L, 0.5, 0.5)
+}
+
+/** A fade handle being dragged: clip [clip]'s fade at its head (else tail) as it would be; [mid] when it's the middle keyframe. */
+private data class FadeDrag(val clip: ULong, val head: Boolean, val fade: Fade, val mid: Boolean)
 
 private fun inOutLabel(p: ProTimeline): String {
     val i = p.markIn
@@ -1084,7 +1091,7 @@ private fun Tracks(
     // a crossfade or fade being dragged: where it would go
     var bandDrag by remember { mutableStateOf<BandDrag?>(null) }
     // a selected clip's corner fade handle being dragged: the clip, its head (else its tail), the length
-    var fadeDrag by remember { mutableStateOf<Triple<ULong, Boolean, Long>?>(null) }
+    var fadeDrag by remember { mutableStateOf<FadeDrag?>(null) }
     // the gesture reads these as they are now, not as they were when it began
     val pNow by rememberUpdatedState(p)
     val rowsNow by rememberUpdatedState(rows)
@@ -1100,19 +1107,61 @@ private fun Tracks(
 
     fun rowAt(rows: List<ProRow>, y: Float) = rows.firstOrNull { y >= it.top && y < it.bottom }
 
-    /** A selected clip's corner fade handle under the finger (x, y in the track stack): the clip, and its head (else its tail). */
-    fun fadeHandleAt(p: ProTimeline, x: Float, y: Float): Pair<ProClip, Boolean>? = with(density) {
+    /** Where clip [c]'s fade [f] at its head (else tail) has its middle keyframe on [r] (x, y in the track stack). */
+    fun midPoint(c: ProClip, f: Fade, head: Boolean, r: ProRow): Offset = with(density) {
+        val edge = if (head) c.start else c.start + c.duration
+        val t = edge + (if (head) 1 else -1) * (f.length * f.midAt).roundToLong()
+        val top = r.top + 2.dp.toPx()
+        val bottom = r.bottom - 2.dp.toPx()
+        Offset(xAt(t), bottom - (bottom - top) * f.midLevel.toFloat())
+    }
+
+    /**
+     * A selected clip's fade handle under the finger (x, y in the track stack): the clip, its head
+     * (else its tail), and whether it's the middle keyframe (else the corner handle).
+     */
+    fun fadeHandleAt(p: ProTimeline, x: Float, y: Float): Triple<ProClip, Boolean, Boolean>? = with(density) {
         val reach = 18.dp.toPx()
         for (r in rowsNow) {
-            // (low enough on the clip, its edges still trim)
-            if (r.track.locked || r.height < 24.dp.toPx() || abs(y - (r.top + FADE_HANDLE_Y.toPx())) > 12.dp.toPx()) continue
+            if (r.track.locked || r.height < 24.dp.toPx()) continue
             for (c in p.clips.filter { it.selected && it.track == r.track.id }) {
-                val (fi, fo) = fadesOf(p, c)
-                if (abs(x - xAt(c.start + fi)) <= reach) return Pair(c, true)
-                if (abs(x - xAt(c.start + c.duration - fo)) <= reach) return Pair(c, false)
+                for (head in listOf(true, false)) {
+                    val f = fadeOf(p, c, head)
+                    // the middle keyframe of a fade there is
+                    if (f.length > 0L) {
+                        val m = midPoint(c, f, head, r)
+                        if (abs(x - m.x) <= 14.dp.toPx() && abs(y - m.y) <= 14.dp.toPx()) return Triple(c, head, true)
+                    }
+                    // the corner handle (low enough on the clip, its edges still trim)
+                    val hx = if (head) xAt(c.start + f.length) else xAt(c.start + c.duration - f.length)
+                    if (abs(y - (r.top + FADE_HANDLE_Y.toPx())) <= 12.dp.toPx() && abs(x - hx) <= reach) return Triple(c, head, false)
+                }
             }
         }
         null
+    }
+
+    /**
+     * Where a fade's inner end at [t] sticks with Snap on: the playhead, a marker, another clip's
+     * edge, or the length of clip [c]'s other fade or of its linked partner's fade, within reach.
+     */
+    fun fadeSnap(p: ProTimeline, c: ProClip, head: Boolean, t: Long): Long? {
+        if (!p.snapping) return null
+        val edge = if (head) c.start else c.start + c.duration
+        val dir = if (head) 1L else -1L
+        val points = buildList {
+            add(ed.playhead)
+            p.markers.forEach { add(it.start) }
+            p.clips.filter { it.id != c.id }.forEach {
+                add(it.start)
+                add(it.start + it.duration)
+            }
+            // the same length as the other fade, or as the linked clip's
+            fadeOf(p, c, !head).length.takeIf { it > 0L }?.let { add(edge + dir * it) }
+            p.clips.filter { c.link != null && it.link == c.link && it.id != c.id }.forEach { o -> fadeOf(p, o, head).length.takeIf { it > 0L }?.let { add(edge + dir * it) } }
+        }
+        val reach = (tAt(xAt(t) + snapReach) - t).coerceAtLeast(0L)
+        return points.minByOrNull { abs(it - t) }?.takeIf { abs(it - t) <= reach }
     }
 
     /** A picture dragged above the top track, or a sound below the last: it goes on a new track. */
@@ -1433,29 +1482,52 @@ private fun Tracks(
                             }
                         }
                         else -> {
-                            // a selected clip's corner fade handle: drag it in to fade the picture (or the
-                            // sound) in or out
+                            // a selected clip's fade handles: its corner handle drags in to fade the picture
+                            // (or the sound) in or out, snapping with Snap on; its middle keyframe bends the
+                            // ramp, anywhere in the fade, at any level
                             val handle = if (!multi) fadeHandleAt(p0, x, stackY) else null
                             if (handle != null) {
-                                val (c, head) = handle
-                                val (fi, fo) = fadesOf(p0, c)
-                                val was = if (head) fi else fo
-                                val room = (c.duration - if (head) fo else fi).coerceAtLeast(0L)
+                                val (c, head, mid) = handle
+                                val was = fadeOf(p0, c, head)
+                                val other = fadeOf(p0, c, !head).length
+                                val room = (c.duration - other).coerceAtLeast(0L)
+                                val edge = if (head) c.start else c.start + c.duration
+                                val row = rowsNow.firstOrNull { it.track.id == c.track }
                                 var dx = 0f
-                                fadeDrag = Triple(c.id, head, was)
+                                var lastSnap: Long? = null
+                                fadeDrag = FadeDrag(c.id, head, was, mid)
                                 while (true) {
                                     val ev = awaitPointerEvent()
                                     val ch = ev.changes.firstOrNull { it.pressed } ?: break
                                     dx += ch.positionChange().x
                                     ev.changes.forEach { it.consume() }
-                                    val dt = (dx / ppsNow() * TPS).roundToLong() * (if (head) 1 else -1)
-                                    fadeDrag = Triple(c.id, head, TimelineMath.snap(was + dt, p0.rateNum, p0.rateDen).coerceIn(0L, room))
+                                    if (mid && row != null && was.length > 0L) {
+                                        // the middle keyframe: where in the fade, and how far up
+                                        val xe = xAt(edge)
+                                        val xi = xAt(edge + (if (head) 1 else -1) * was.length)
+                                        val at = ((ch.position.x - xe) / (xi - xe).let { if (abs(it) < 1f) 1f else it }).coerceIn(0.02f, 0.98f)
+                                        val top = row.top + 2.dp.toPx()
+                                        val bottom = row.bottom - 2.dp.toPx()
+                                        val level = ((bottom - (ch.position.y + vNow())) / (bottom - top)).coerceIn(0f, 1f)
+                                        fadeDrag = FadeDrag(c.id, head, was.copy(midAt = at.toDouble(), midLevel = level.toDouble()), true)
+                                    } else {
+                                        val dt = (dx / ppsNow() * TPS).roundToLong() * (if (head) 1 else -1)
+                                        val raw = TimelineMath.snap(was.length + dt, p0.rateNum, p0.rateDen).coerceIn(0L, room)
+                                        val inner = edge + (if (head) 1 else -1) * raw
+                                        val snap = fadeSnap(p0, c, head, inner)
+                                        if (snap != null && snap != lastSnap) haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                        lastSnap = snap
+                                        ed.playheadSnap = snap
+                                        val len = snap?.let { abs(it - edge).coerceIn(0L, room) } ?: raw
+                                        fadeDrag = FadeDrag(c.id, head, was.copy(length = len), false)
+                                    }
                                 }
-                                val len = fadeDrag?.third
+                                val done = fadeDrag?.fade
                                 fadeDrag = null
-                                if (len != null && len != was) {
+                                ed.playheadSnap = null
+                                if (done != null && done != was) {
                                     haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                    ed.setClipFades(c.id, if (head) len else fi, if (head) fo else len)
+                                    ed.setFade(c.id, head, done)
                                 }
                                 return@awaitEachGesture
                             }
@@ -1660,7 +1732,7 @@ private fun Tracks(
             for (tr0 in p.transitions) {
                 // the fade whose handle is being dragged is drawn from the handle instead
                 val fd = fadeDrag
-                if (fd != null && ((fd.second && tr0.from == null && tr0.to == fd.first) || (!fd.second && tr0.to == null && tr0.from == fd.first))) continue
+                if (fd != null && ((fd.head && tr0.from == null && tr0.to == fd.clip) || (!fd.head && tr0.to == null && tr0.from == fd.clip))) continue
                 // the one being dragged is drawn where it would go
                 val tr = bandDrag?.takeIf { it.id == tr0.id }?.let { b -> tr0.copy(start = b.start, duration = b.duration) } ?: tr0
                 val r = rowOf[tr.track] ?: continue
@@ -1686,13 +1758,11 @@ private fun Tracks(
                 }
                 if (picked) drawRect(Color.White, Offset(x0, top), Size(max(2f, x1 - x0), bottom - top), style = Stroke(2.dp.toPx()))
             }
-            // selected clips' corner fade handles (and a fade being dragged, with its length)
+            // selected clips' fades: each faded part darkened above its ramp, bent through its
+            // middle keyframe, the corner handles at the top; a fade being dragged shows its length
             for (c in p.clips.filter { it.selected }) {
                 val r = rowOf[c.track] ?: continue
                 if (r.track.locked || r.height < 24.dp.toPx()) continue
-                val fd = fadeDrag?.takeIf { it.first == c.id }
-                var (fi, fo) = fadesOf(p, c)
-                if (fd != null) if (fd.second) fi = fd.third else fo = fd.third
                 val x0 = xOf(c.start)
                 val x1 = xOf(c.start + c.duration)
                 if (x1 < 0f || x0 > w) continue
@@ -1700,31 +1770,33 @@ private fun Tracks(
                 val bottom = r.bottom - 2.dp.toPx()
                 val shade = Color.Black.copy(alpha = 0.4f)
                 val ramp = Color.White.copy(alpha = 0.9f)
-                if (fd != null) {
-                    // the faded part darkened above its ramp
-                    if (fi > 0L) {
-                        val xi = xOf(c.start + fi)
-                        drawPath(Path().apply { moveTo(x0, top); lineTo(xi, top); lineTo(x0, bottom); close() }, shade)
-                        drawLine(ramp, Offset(x0, bottom), Offset(xi, top), 1.5.dp.toPx())
-                    }
-                    if (fo > 0L) {
-                        val xo = xOf(c.start + c.duration - fo)
-                        drawPath(Path().apply { moveTo(x1, top); lineTo(xo, top); lineTo(x1, bottom); close() }, shade)
-                        drawLine(ramp, Offset(xo, top), Offset(x1, bottom), 1.5.dp.toPx())
-                    }
-                    val len = fd.third
-                    val label = measurer.measure("%.2f s".format(len.toDouble() / TPS), TextStyle(fontFamily = Inter, fontSize = 11.sp, color = Color.Black, fontFeatureSettings = "tnum"))
-                    val hx = if (fd.second) xOf(c.start + fi) else xOf(c.start + c.duration - fo)
-                    val pad = 4.dp.toPx()
-                    val bx = (hx - label.size.width / 2f - pad).coerceIn(0f, w - label.size.width - pad * 2)
-                    val by = (top - label.size.height - pad * 2).coerceAtLeast(r.top - label.size.height - pad)
-                    drawRoundRect(Color.White, Offset(bx, by), Size(label.size.width + pad * 2, label.size.height + pad), CornerRadius(pad, pad))
-                    drawText(label, topLeft = Offset(bx + pad, by + pad / 2))
-                }
                 val hy = r.top + FADE_HANDLE_Y.toPx()
-                for (hx in listOf(xOf(c.start + fi), xOf(c.start + c.duration - fo))) {
-                    drawCircle(Color.Black, radius = 7.dp.toPx(), center = Offset(hx, hy))
-                    drawCircle(Color.White, radius = 5.dp.toPx(), center = Offset(hx, hy))
+                for (head in listOf(true, false)) {
+                    val fd = fadeDrag?.takeIf { it.clip == c.id && it.head == head }
+                    val f = fd?.fade ?: fadeOf(p, c, head)
+                    val xe = if (head) x0 else x1
+                    val xi = if (head) xOf(c.start + f.length) else xOf(c.start + c.duration - f.length)
+                    if (f.length > 0L) {
+                        val m = midPoint(c, f, head, r)
+                        drawPath(Path().apply { moveTo(xe, top); lineTo(xi, top); lineTo(m.x, m.y); lineTo(xe, bottom); close() }, shade)
+                        drawLine(ramp, Offset(xe, bottom), m, 1.5.dp.toPx())
+                        drawLine(ramp, m, Offset(xi, top), 1.5.dp.toPx())
+                        // the middle keyframe: a diamond, lit while dragged
+                        val d = 6.dp.toPx()
+                        drawPath(Path().apply { moveTo(m.x, m.y - d); lineTo(m.x + d, m.y); lineTo(m.x, m.y + d); lineTo(m.x - d, m.y); close() }, if (fd?.mid == true) Fc.AccentLight else Color.White)
+                    }
+                    drawCircle(Color.Black, radius = 7.dp.toPx(), center = Offset(xi, hy))
+                    drawCircle(Color.White, radius = 5.dp.toPx(), center = Offset(xi, hy))
+                    if (fd != null) {
+                        val text = if (fd.mid) "%d%%".format((f.midLevel * 100).roundToInt()) else "%.2f s".format(f.length.toDouble() / TPS)
+                        val label = measurer.measure(text, TextStyle(fontFamily = Inter, fontSize = 11.sp, color = Color.Black, fontFeatureSettings = "tnum"))
+                        val hx = if (fd.mid) midPoint(c, f, head, r).x else xi
+                        val pad = 4.dp.toPx()
+                        val bx = (hx - label.size.width / 2f - pad).coerceIn(0f, w - label.size.width - pad * 2)
+                        val by = (top - label.size.height - pad * 2).coerceAtLeast(r.top - label.size.height - pad)
+                        drawRoundRect(Color.White, Offset(bx, by), Size(label.size.width + pad * 2, label.size.height + pad), CornerRadius(pad, pad))
+                        drawText(label, topLeft = Offset(bx + pad, by + pad / 2))
+                    }
                 }
             }
             // locked tracks: hatched
