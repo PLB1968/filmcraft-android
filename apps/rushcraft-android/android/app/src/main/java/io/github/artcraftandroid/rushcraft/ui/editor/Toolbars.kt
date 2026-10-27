@@ -69,10 +69,10 @@ enum class ToolbarKind(val title: String, val defaults: List<String>) {
     Transport(
         "Program Monitor",
         // the essentials, on one line; the rest of the monitor's buttons are in its ⋯ menu
-        listOf("markIn", "markOut", "goToStart", "stepBack", "play", "stepForward", "goToEnd", "addMarker", "deleteMarker"),
+        listOf("goToStart", "stepBack", "play", "stepForward", "goToEnd", "addMarker", "deleteMarker"),
     ),
     Tools("Tools", ProTool.entries.map { it.name }),
-    Timeline("Timeline", listOf("snap", "linked", "addMarker", "addTracks", "zoomFit", "markIn", "markOut")),
+    Timeline("Timeline", listOf("snap", "linked", "addMarker", "addTracks", "zoomFit")),
     Favourites("Favourites", listOf("titles", "captions", "colour", "editText", "voiceover"));
 
     /** The Program monitor's own buttons, which its ⋯ menu offers when they're not on the bar. */

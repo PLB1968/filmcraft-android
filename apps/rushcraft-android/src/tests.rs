@@ -1532,6 +1532,72 @@ fn markers_move_and_all_clear_in_one_step_each() {
 }
 
 #[test]
+fn a_picture_moved_up_a_track_takes_its_sound_down_one_too() {
+    let (m, _d, ids) = two_clips();
+    m.add_tracks(1, 0).unwrap();
+    let t = m.pro_timeline().unwrap();
+    let (a1, v2) = (t.audio_tracks[0].id, t.video_tracks[1].id);
+    let link = pclip(&m, ids[0]).link.expect("a.mp4 has its sound");
+    let sound = |m: &MobileSession| m.pro_timeline().unwrap().clips.into_iter().find(|c| c.link == Some(link) && c.id != ids[0]).expect("its sound");
+    assert_eq!(sound(&m).track, a1);
+    // V1 → V2: A1 → A2, added
+    m.pro_move_clip(ids[0], v2, SEC).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(t.audio_tracks.len(), 2);
+    let s = sound(&m);
+    assert_eq!((s.track, s.start), (t.audio_tracks[1].id, SEC));
+    assert_eq!(pclip(&m, ids[0]).track, v2);
+    // and back down: back to A1
+    m.pro_move_clip(ids[0], t.video_tracks[0].id, 0).unwrap();
+    assert_eq!(sound(&m).track, a1);
+    // a new video track by dragging past the top: the sound goes down a track too
+    m.pro_move_to_new_track(ids[0], 0).unwrap();
+    let t = m.pro_timeline().unwrap();
+    assert_eq!(sound(&m).track, t.audio_tracks[2].id, "V1 → V3: A1 → A3");
+}
+
+#[test]
+fn a_clip_moved_off_a_clip_it_covered_brings_it_back_as_it_was_even_after_reopening() {
+    let (m, d, ids) = two_clips();
+    let v1 = m.pro_timeline().unwrap().video_tracks[0].id;
+    let a = pclip(&m, ids[0]);
+    let b = pclip(&m, ids[1]);
+    // b dropped over a's second half: a loses its tail
+    m.pro_move_clip(ids[1], v1, a.start + a.duration / 2).unwrap();
+    let cut = pclip(&m, ids[0]);
+    assert!(cut.duration < a.duration, "a was overwritten: {} < {}", cut.duration, a.duration);
+    // saved and opened again, b moved well away: a is whole again, its In and Out as before
+    let path = d.join("covers.fcproj").to_string_lossy().into_owned();
+    m.save_project(path.clone()).unwrap();
+    let m = MobileSession::new();
+    m.open_project(path).unwrap();
+    m.pro_move_clip(ids[1], v1, a.start + a.duration + b.duration * 4).unwrap();
+    let back = pclip(&m, ids[0]);
+    assert_eq!((back.start, back.duration, back.source_in), (a.start, a.duration, a.source_in));
+    assert_eq!(m.poll().undo_label.as_deref(), Some("Move Clips"));
+    // one undo step: a is cut again and b back over it
+    m.undo();
+    assert_eq!(pclip(&m, ids[0]).duration, cut.duration);
+}
+
+#[test]
+fn a_covered_clip_grows_back_only_into_room_that_is_free() {
+    let (m, _d, ids) = two_clips();
+    let v1 = m.pro_timeline().unwrap().video_tracks[0].id;
+    let a = pclip(&m, ids[0]);
+    let half = a.start + a.duration / 2;
+    m.pro_move_clip(ids[1], v1, half).unwrap();
+    // b moves on by a quarter of a: only the quarter it left comes back
+    m.pro_move_clip(ids[1], v1, half + a.duration / 4).unwrap();
+    let grown = pclip(&m, ids[0]);
+    assert_eq!(grown.start, a.start);
+    assert!((grown.duration - (half + a.duration / 4 - a.start)).abs() <= SEC / 30, "{}", grown.duration);
+    // then all the way off: whole
+    m.pro_move_clip(ids[1], v1, a.start + a.duration * 4).unwrap();
+    assert_eq!(pclip(&m, ids[0]).duration, a.duration);
+}
+
+#[test]
 fn a_clip_dragged_past_the_outermost_track_gets_a_new_track_in_one_step() {
     let (m, _d, ids) = two_clips();
     let t = m.pro_timeline().unwrap();
@@ -1539,7 +1605,7 @@ fn a_clip_dragged_past_the_outermost_track_gets_a_new_track_in_one_step() {
     m.pro_move_to_new_track(ids[0], SEC).unwrap();
     let t = m.pro_timeline().unwrap();
     assert_eq!(t.video_tracks.len(), nv + 1);
-    assert_eq!(t.audio_tracks.len(), na, "a picture gets a video track");
+    assert_eq!(t.audio_tracks.len(), na + 1, "its sound goes down a track with it");
     let top = t.video_tracks.last().unwrap().id;
     let c = pclip(&m, ids[0]);
     assert_eq!((c.track, c.start), (top, SEC));

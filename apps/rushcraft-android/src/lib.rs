@@ -24,6 +24,7 @@ use filmcraft_engine::Session;
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
 
+pub mod covers;
 pub mod edits;
 pub mod masks;
 pub mod export;
@@ -214,6 +215,8 @@ pub struct MobileSession {
     next_job: AtomicU64,
     /// The proxies being made, one at a time.
     proxies: Mutex<proxy::ProxyQueue>,
+    /// Clips moves covered, to bring back when the covering clip moves away.
+    covers: Mutex<Vec<covers::Cover>>,
 }
 
 impl MobileSession {
@@ -224,6 +227,10 @@ impl MobileSession {
     }
 
     /// The proxy queue (taken after the session, never before).
+    fn covers_mut(&self) -> MutexGuard<'_, Vec<covers::Cover>> {
+        self.covers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn proxy_queue(&self) -> MutexGuard<'_, proxy::ProxyQueue> {
         self.proxies.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -251,6 +258,7 @@ impl Default for MobileSession {
             caption_jobs: Mutex::new(HashMap::new()),
             next_job: AtomicU64::new(1),
             proxies: Mutex::new(proxy::ProxyQueue::default()),
+            covers: Mutex::new(Vec::new()),
         }
     }
 }
@@ -339,6 +347,7 @@ impl MobileSession {
         )?;
         s.history.undo.clear();
         s.history.redo.clear();
+        self.covers_mut().clear();
         model::timeline(&s)
     }
 
@@ -361,12 +370,25 @@ impl MobileSession {
             }
         }
         tools::drop_idle_lumetri(&mut s);
+        *self.covers_mut() = std::fs::read_to_string(covers::path_for(&path))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .map(|v| covers::from_json(&v))
+            .unwrap_or_default();
         model::timeline(&s)
     }
 
     /// Save the project to `path`.
     pub fn save_project(&self, path: String) -> Result<(), MobileError> {
         self.lock().execute("file.save", json!({ "path": path }))?;
+        // what moved clips covered, beside it (none: no file)
+        let covers = self.covers_mut().clone();
+        let side = covers::path_for(&path);
+        if covers.is_empty() {
+            let _ = std::fs::remove_file(&side);
+        } else {
+            let _ = std::fs::write(&side, covers::to_json(&covers).to_string());
+        }
         Ok(())
     }
 
@@ -809,12 +831,18 @@ impl MobileSession {
 
     /// Move a clip to `start` on `track`, overwriting what is there (linked partners follow).
     pub fn pro_move_clip(&self, clip: u64, track: u64, start: i64) -> Result<(), MobileError> {
-        self.pro_edit(|s| pro::move_clip(s, clip, track, start))
+        self.pro_edit(|s| {
+            pro::check_move(s, clip, track)?;
+            covers::move_healing(s, &mut self.covers_mut(), clip, "Move Clips", |s| pro::move_linked(s, clip, track, start))
+        })
     }
 
     /// Move a clip to `start` on a new track of its kind (dragged past the outermost track).
     pub fn pro_move_to_new_track(&self, clip: u64, start: i64) -> Result<(), MobileError> {
-        self.pro_edit(|s| pro::move_clip_to_new_track(s, clip, start))
+        self.pro_edit(|s| {
+            let video = pro::clip_is_video(s, clip)?;
+            covers::move_healing(s, &mut self.covers_mut(), clip, "Move Clip to New Track", |s| pro::to_new_track(s, clip, start, video))
+        })
     }
 
     /// Delete the selected clips; `ripple` closes the gap they leave.
